@@ -10,6 +10,29 @@
   margin: 0.5rem 0;
 }
 
+.oc-wiki-setting-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.45rem;
+}
+
+.oc-wiki-setting-grid label {
+  min-width: 0;
+}
+
+.oc-wiki-scan-toggle {
+  margin-top: 0.45rem;
+}
+
+.oc-wiki-help {
+  display: block;
+  margin: 0.4rem 0 0.55rem;
+  opacity: 0.72;
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+
 .oc-wiki-status {
   margin: 0.35rem 0 0.6rem;
   opacity: 0.82;
@@ -53,4 +76,10 @@
 .oc-wiki-empty {
   opacity: 0.72;
   font-size: 0.9em;
+}
+
+@media (max-width: 720px) {
+  .oc-wiki-setting-grid {
+    grid-template-columns: 1fr;
+  }
 }
