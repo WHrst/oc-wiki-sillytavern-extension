@@ -1,6 +1,6 @@
 const LEGACY_MODULE_NAME = "oc-wiki-worldbook";
 const MODULE_NAME = "external-lore-source";
-const EXTENSION_VERSION = "0.4.4";
+const EXTENSION_VERSION = "0.4.5";
 const PROMPT_KEY_SUFFIX = `_${MODULE_NAME}`;
 const LEGACY_PROMPT_KEY_SUFFIX = `_${LEGACY_MODULE_NAME}`;
 
@@ -68,6 +68,14 @@ let settingsModalKeydownBound = false;
 
 function stContext() {
   return globalThis.SillyTavern?.getContext?.() || {};
+}
+
+function tavernHelperGenerateRaw() {
+  return globalThis.TavernHelper?.generateRaw;
+}
+
+function hasTavernMainGeneration() {
+  return typeof tavernHelperGenerateRaw() === "function" || typeof stContext().generateRaw === "function";
 }
 
 function extensionSettings() {
@@ -445,9 +453,8 @@ async function fetchExternalModels(current = settings()) {
 
 async function testProcessorConnection(current = settings()) {
   if (current.processorMode === "tavern") {
-    const context = stContext();
-    if (typeof context.generateRaw !== "function") {
-      throw new Error("当前 SillyTavern 未暴露 generateRaw，无法使用酒馆主 API 整理。");
+    if (!hasTavernMainGeneration()) {
+      throw new Error("当前 SillyTavern 未暴露 TavernHelper.generateRaw 或 generateRaw，无法使用酒馆主 API 整理。");
     }
     const processorUrl = normalizeProcessorUrl(current.processorUrl);
     if (!processorUrl) {
@@ -494,10 +501,49 @@ async function testProcessorConnection(current = settings()) {
   return data.message || data.status || "第三方整理 API 连接正常。";
 }
 
-async function summarizeWithTavernMainApi(current, data, bindings) {
+async function generateWithTavernMainApi(systemPrompt, prompt, responseLength) {
+  const maxTokens = Math.min(Number(responseLength) || DEFAULT_SETTINGS.maxTokens, 12000);
+  const helperGenerateRaw = tavernHelperGenerateRaw();
+  if (typeof helperGenerateRaw === "function") {
+    return String(await helperGenerateRaw.call(globalThis.TavernHelper, {
+      user_input: "",
+      ordered_prompts: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt }
+      ],
+      overrides: {
+        world_info_before: "",
+        world_info_after: "",
+        persona_description: "",
+        char_description: "",
+        char_personality: "",
+        scenario: "",
+        dialogue_examples: "",
+        chat_history: { prompts: [], with_depth_entries: false, author_note: "" }
+      },
+      injects: [],
+      max_chat_history: 0,
+      should_stream: true
+    })).trim();
+  }
+
   const context = stContext();
-  if (typeof context.generateRaw !== "function") {
-    throw new Error("当前 SillyTavern 未暴露 generateRaw，无法使用酒馆主 API 整理。");
+  if (typeof context.generateRaw === "function") {
+    return String(await context.generateRaw({
+      prompt: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt }
+      ],
+      responseLength: maxTokens
+    })).trim();
+  }
+
+  throw new Error("当前 SillyTavern 未暴露 TavernHelper.generateRaw 或 generateRaw，无法使用酒馆主 API 整理。");
+}
+
+async function summarizeWithTavernMainApi(current, data, bindings) {
+  if (!hasTavernMainGeneration()) {
+    throw new Error("当前 SillyTavern 未暴露 TavernHelper.generateRaw 或 generateRaw，无法使用酒馆主 API 整理。");
   }
   const rawText = rawTextFromProcessorData(data);
   if (!rawText) {
@@ -522,11 +568,7 @@ async function summarizeWithTavernMainApi(current, data, bindings) {
     "原文：",
     rawText
   ].join("\n\n");
-  return String(await context.generateRaw({
-    prompt,
-    systemPrompt,
-    responseLength: Math.min(current.maxTokens, 12000)
-  })).trim();
+  return generateWithTavernMainApi(systemPrompt, prompt, current.maxTokens);
 }
 
 async function fetchExternalContext(current, bindings) {
@@ -1234,12 +1276,15 @@ function settingsModalMarkup() {
         <div id="external_lore_source_api_modal_status" class="external-lore-modal-status" data-type="neutral">配置后点击保存。</div>
 
         <div class="external-lore-dialog-actions">
-          <button id="external_lore_source_test" type="button" class="menu_button">测试上下文</button>
-          <button id="external_lore_source_fetch_models" type="button" class="menu_button">获取模型</button>
-          <button id="external_lore_source_test_api" type="button" class="menu_button">测试连接</button>
-          <span class="external-lore-dialog-spacer"></span>
-          <button type="button" class="menu_button" data-modal-close>取消</button>
-          <button id="external_lore_source_save_settings" type="button" class="menu_button">保存设置</button>
+          <div class="external-lore-dialog-action-group">
+            <button id="external_lore_source_test" type="button" class="menu_button">测试上下文</button>
+            <button id="external_lore_source_fetch_models" type="button" class="menu_button">获取模型</button>
+            <button id="external_lore_source_test_api" type="button" class="menu_button">测试连接</button>
+          </div>
+          <div class="external-lore-dialog-action-group external-lore-dialog-action-group-primary">
+            <button type="button" class="menu_button" data-modal-close>取消</button>
+            <button id="external_lore_source_save_settings" type="button" class="menu_button">保存设置</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1495,12 +1540,15 @@ function renderSettings() {
           <div id="external_lore_source_api_modal_status" class="external-lore-modal-status" data-type="neutral">配置后点击保存。</div>
 
           <div class="external-lore-dialog-actions">
-            <button id="external_lore_source_test" type="button" class="menu_button">测试上下文</button>
-            <button id="external_lore_source_fetch_models" type="button" class="menu_button">获取模型</button>
-            <button id="external_lore_source_test_api" type="button" class="menu_button">测试连接</button>
-            <span class="external-lore-dialog-spacer"></span>
-            <button type="button" class="menu_button" data-modal-close>取消</button>
-            <button id="external_lore_source_save_settings" type="button" class="menu_button">保存设置</button>
+            <div class="external-lore-dialog-action-group">
+              <button id="external_lore_source_test" type="button" class="menu_button">测试上下文</button>
+              <button id="external_lore_source_fetch_models" type="button" class="menu_button">获取模型</button>
+              <button id="external_lore_source_test_api" type="button" class="menu_button">测试连接</button>
+            </div>
+            <div class="external-lore-dialog-action-group external-lore-dialog-action-group-primary">
+              <button type="button" class="menu_button" data-modal-close>取消</button>
+              <button id="external_lore_source_save_settings" type="button" class="menu_button">保存设置</button>
+            </div>
           </div>
         </div>
       </div>
