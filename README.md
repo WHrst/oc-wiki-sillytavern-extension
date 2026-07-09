@@ -32,13 +32,13 @@ git clone https://github.com/WHrst/oc-wiki-sillytavern-extension.git public/scri
 
 1. 打开 SillyTavern 的扩展设置。
 2. 找到 **External Lore Source**。
-3. 点击 **配置整理 API** 打开配置弹窗。
-4. 选择整理方式：
+3. 点击 **打开设置** 打开配置弹窗。也可以在 **世界书** 页面标题或工具栏附近点击 External Lore Source 的链条按钮进入同一个弹窗。
+4. 在弹窗里绑定 OC Wiki 分享链接或外部网页链接。
+5. 选择整理方式：
    - **第三方整理 API**：外部服务负责抓取、清洗和整理。
    - **酒馆主 API**：外部服务只返回网页原文，插件再调用当前 SillyTavern 主 API 整理。
-5. 根据需要填写 API 地址、API Key、模型列表 API、模型、语言和 token 预算。
-6. 可以点击 **获取模型**、**测试连接**，确认后点 **保存配置**。
-7. 粘贴 OC Wiki 分享链接或外部网页链接，点击对应的绑定按钮。
+6. 根据需要填写 API 地址、API Key、模型列表 API、模型、语言和 token 预算。
+7. 可以点击 **获取模型**、**测试连接**、**测试上下文**，确认后点 **保存设置**。
 8. 保持扩展开启。生成前，插件会读取已启用来源，并把整理后的 lore 文本注入当前请求。
 
 ## 整理 API
@@ -68,7 +68,7 @@ git clone https://github.com/WHrst/oc-wiki-sillytavern-extension.git public/scri
   },
   "client": {
     "name": "External Lore Source",
-    "version": "0.4.0"
+    "version": "0.4.2"
   }
 }
 ```
@@ -163,14 +163,14 @@ SillyTavern 的扩展提示词 API 没有独立的“权重”参数；内置世
 
 ## 从旧版升级
 
-0.3.0 起，扩展显示名改为 **External Lore Source**，但会自动迁移旧的 `OC Wiki Worldbook` 设置。0.4.0 新增整理 API 弹窗、模型获取、测试连接和酒馆主 API 模式。0.4.1 会在新版脚本加载时替换已经存在的旧版设置面板，避免扩展热更新后仍显示旧表单。
+0.3.0 起，扩展显示名改为 **External Lore Source**，但会自动迁移旧的 `OC Wiki Worldbook` 设置。0.4.0 新增整理 API 弹窗、模型获取、测试连接和酒馆主 API 模式。0.4.1 会在新版脚本加载时替换已经存在的旧版设置面板，避免扩展热更新后仍显示旧表单。0.4.2 把来源绑定、API、注入设置和测试入口都收进同一个设置弹窗，并在世界书页面增加快捷按钮。
 
 如果扩展列表显示已经更新，但设置面板仍然是旧界面：
 
-1. 在扩展管理器里再执行一次更新，确认版本至少是 `0.4.1`。
+1. 在扩展管理器里再执行一次更新，确认版本至少是 `0.4.2`。
 2. 重启 SillyTavern 后端，然后在浏览器里硬刷新页面。
 3. 检查 `public/scripts/extensions/third-party/` 下是否有多个旧插件目录；如果有，只保留当前安装器使用的那个。
-4. 新版面板底部状态会显示 `待命 · v0.4.1`。
+4. 新版面板底部状态会显示 `待命 · v0.4.2`。
 
 ## English
 
@@ -182,4 +182,4 @@ Install this repository from SillyTavern's extension installer:
 https://github.com/WHrst/oc-wiki-sillytavern-extension
 ```
 
-Version 0.4.1 adds a modal API configuration flow, external model fetching, connection testing, an optional SillyTavern main API summarization mode, and replacement of stale settings panels after hot updates.
+Version 0.4.2 moves source binding, API, injection, and test controls into one modal, and adds a World Info page launcher button.
