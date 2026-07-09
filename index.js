@@ -1,6 +1,6 @@
 const LEGACY_MODULE_NAME = "oc-wiki-worldbook";
 const MODULE_NAME = "external-lore-source";
-const EXTENSION_VERSION = "0.4.2";
+const EXTENSION_VERSION = "0.4.3";
 const PROMPT_KEY_SUFFIX = `_${MODULE_NAME}`;
 const LEGACY_PROMPT_KEY_SUFFIX = `_${LEGACY_MODULE_NAME}`;
 
@@ -64,6 +64,7 @@ const PROCESSOR_MODES = Object.freeze({
 
 let lastContextNotice = "";
 let worldbookLauncherObserver = null;
+let settingsModalKeydownBound = false;
 
 function stContext() {
   return globalThis.SillyTavern?.getContext?.() || {};
@@ -857,7 +858,7 @@ function setModalStatus(text, type = "neutral") {
 }
 
 function setSettingsModalOpen(open) {
-  const modal = document.querySelector("#external_lore_source_api_modal");
+  const modal = open ? ensureSettingsModal() : document.querySelector("#external_lore_source_api_modal");
   if (!modal) {
     return;
   }
@@ -870,6 +871,16 @@ function setSettingsModalOpen(open) {
 }
 
 function worldbookLauncherHost() {
+  const toolbarButton = document.querySelector("#world_popup_new, #world_refresh");
+  if (toolbarButton?.parentElement) {
+    return toolbarButton.parentElement;
+  }
+
+  const editorSelect = document.querySelector("#world_editor_select");
+  if (editorSelect?.parentElement) {
+    return editorSelect.parentElement;
+  }
+
   const worldPanel = document.querySelector("#WorldInfo");
   const titledHeader = [...document.querySelectorAll("#WorldInfo .inline-drawer-header, #WorldInfo .drawer-header, #WorldInfo h3, #WorldInfo h4")]
     .find((node) => /世界书|World Info|Lorebook/i.test(node.textContent || ""));
@@ -883,18 +894,10 @@ function worldbookLauncherHost() {
     return header;
   }
 
-  const toolbarButton = document.querySelector("#world_popup_new, #world_refresh");
-  if (toolbarButton?.parentElement) {
-    return toolbarButton.parentElement;
-  }
-
-  return document.querySelector("#world_editor_select")?.parentElement || null;
+  return null;
 }
 
 function installWorldbookLauncher() {
-  if (!document.querySelector("#external_lore_source_api_modal")) {
-    return;
-  }
   const existing = document.querySelector("#external_lore_source_worldbook_button");
   const host = worldbookLauncherHost();
   if (!host) {
@@ -913,9 +916,9 @@ function installWorldbookLauncher() {
   button.type = "button";
   button.className = "menu_button external-lore-worldbook-button";
   button.dataset.version = EXTENSION_VERSION;
-  button.title = "External Lore Source";
+  button.title = "打开 External Lore Source 设置";
   button.setAttribute("aria-label", "打开 External Lore Source 设置");
-  button.innerHTML = '<i class="fa-solid fa-link" aria-hidden="true"></i>';
+  button.innerHTML = '<i class="fa-solid fa-link" aria-hidden="true"></i><span>外置 Lore</span>';
   button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -992,6 +995,7 @@ function populateSettingsModal() {
   if (tavernModel) {
     tavernModel.value = tavern.model;
   }
+  renderBindings();
   updateProcessorModePanels();
   setModalStatus(current.lastProcessorStatus || "配置后点击保存，测试连接不会自动保存草稿。");
 }
@@ -1093,7 +1097,236 @@ async function handleTestProcessor() {
   }
 }
 
+function settingsModalMarkup() {
+  return `
+    <div id="external_lore_source_api_modal" class="external-lore-modal" aria-hidden="true">
+      <div class="external-lore-modal-backdrop" data-modal-close></div>
+      <div class="external-lore-dialog" role="dialog" aria-modal="true" aria-labelledby="external_lore_source_api_modal_title">
+        <div class="external-lore-dialog-header">
+          <div>
+            <div id="external_lore_source_api_modal_title" class="external-lore-dialog-title">External Lore Source 设置</div>
+            <div class="external-lore-dialog-subtitle">管理来源绑定、整理 API 和注入顺序。</div>
+          </div>
+          <button type="button" class="menu_button external-lore-icon-button" data-modal-close aria-label="关闭">×</button>
+        </div>
+
+        <div class="external-lore-modal-body">
+          <div class="external-lore-modal-section">
+            <div class="external-lore-section-title">来源绑定</div>
+            <div class="external-lore-form-grid">
+              <label>
+                OC Wiki 地址
+                <input id="external_lore_source_oc_base_url" class="text_pole" type="url" placeholder="https://oc.example.com">
+              </label>
+              <label>
+                OC Wiki 分享链接
+                <textarea id="external_lore_source_oc_share_url" class="text_pole" rows="2" placeholder="粘贴 OC Wiki 分享链接，例如 ?share=...#entry=..."></textarea>
+              </label>
+              <label class="external-lore-full-row">
+                外部网页 / Wiki 链接
+                <textarea id="external_lore_source_url" class="text_pole" rows="2" placeholder="粘贴网页、MediaWiki、百科页面或资料站链接"></textarea>
+              </label>
+            </div>
+            <div class="external-lore-actions">
+              <button id="external_lore_source_add_oc" type="button" class="menu_button">绑定 OC Wiki</button>
+              <button id="external_lore_source_add_web" type="button" class="menu_button">绑定网页</button>
+            </div>
+            <div id="external_lore_source_bindings" class="external-lore-bindings"></div>
+          </div>
+
+          <div class="external-lore-modal-section">
+            <div class="external-lore-section-title">整理 API</div>
+            <div class="external-lore-mode-switch" role="radiogroup" aria-label="整理方式">
+              <label class="checkbox_label">
+                <input id="external_lore_source_processor_mode_external" type="radio" name="external_lore_source_processor_mode" value="external">
+                第三方整理 API
+              </label>
+              <label class="checkbox_label">
+                <input id="external_lore_source_processor_mode_tavern" type="radio" name="external_lore_source_processor_mode" value="tavern">
+                酒馆主 API
+              </label>
+            </div>
+            <div class="external-lore-form-grid">
+              <label>
+                整理 / 抓取 API 地址
+                <input id="external_lore_source_processor_url" class="text_pole" type="url" placeholder="https://api.example.com/lore/context">
+              </label>
+              <label>
+                API Key（可选）
+                <input id="external_lore_source_processor_key" class="text_pole" type="password" autocomplete="off">
+              </label>
+              <label>
+                语言
+                <input id="external_lore_source_language" class="text_pole" type="text" placeholder="zh-CN">
+              </label>
+              <label>
+                预算 token
+                <input id="external_lore_source_max_tokens" class="text_pole" type="number" min="100" max="200000" step="100">
+              </label>
+            </div>
+
+            <div data-processor-panel="external" class="external-lore-processor-panel">
+              <div class="external-lore-form-grid">
+                <label>
+                  模型列表 API（可选）
+                  <input id="external_lore_source_processor_models_url" class="text_pole" type="url" placeholder="留空时尝试 /v1/models">
+                </label>
+                <label>
+                  使用模型
+                  <input id="external_lore_source_processor_model" class="text_pole" type="text" list="external_lore_source_model_list" placeholder="手动输入或获取模型">
+                  <datalist id="external_lore_source_model_list"></datalist>
+                </label>
+              </div>
+            </div>
+
+            <div data-processor-panel="tavern" class="external-lore-processor-panel" hidden>
+              <div class="external-lore-form-grid">
+                <label>
+                  当前 API
+                  <input id="external_lore_source_tavern_main_api" class="text_pole" type="text" readonly>
+                </label>
+                <label>
+                  当前模型
+                  <input id="external_lore_source_tavern_model" class="text_pole" type="text" readonly>
+                </label>
+              </div>
+              <div class="external-lore-help">这个模式仍需要上面的抓取 API 返回网页原文；插件再调用 SillyTavern 的 <code>generateRaw</code> 整理成 lore。</div>
+            </div>
+          </div>
+
+          <div class="external-lore-modal-section">
+            <div class="external-lore-section-title">注入设置</div>
+            <div class="external-lore-form-grid">
+              <label>
+                注入位置
+                <select id="external_lore_source_injection_position" class="text_pole">
+                  <option value="in_prompt">主提示词内 / In Prompt</option>
+                  <option value="before_prompt">主提示词前 / Before Prompt</option>
+                  <option value="in_chat">聊天中 / In Chat</option>
+                  <option value="none">不注入 / None</option>
+                </select>
+              </label>
+              <label>
+                深度
+                <input id="external_lore_source_injection_depth" class="text_pole" type="number" min="0" max="10000" step="1">
+              </label>
+              <label>
+                角色
+                <select id="external_lore_source_injection_role" class="text_pole">
+                  <option value="system">系统 / System</option>
+                  <option value="user">用户 / User</option>
+                  <option value="assistant">助手 / Assistant</option>
+                </select>
+              </label>
+              <label>
+                注入顺序
+                <input id="external_lore_source_injection_order" class="text_pole" type="number" min="0" max="9999" step="1">
+              </label>
+            </div>
+            <label class="checkbox_label external-lore-scan-toggle">
+              <input id="external_lore_source_include_wi_scan" type="checkbox">
+              参与世界书扫描
+            </label>
+            <div class="external-lore-help">使用 SillyTavern 原生扩展提示词注入。位置、深度、角色与酒馆的 Author's Note / Memory 类扩展一致；顺序会写入 prompt key，数值越小越靠前。</div>
+          </div>
+        </div>
+
+        <div id="external_lore_source_api_modal_status" class="external-lore-modal-status" data-type="neutral">配置后点击保存。</div>
+
+        <div class="external-lore-dialog-actions">
+          <button id="external_lore_source_test" type="button" class="menu_button">测试上下文</button>
+          <button id="external_lore_source_fetch_models" type="button" class="menu_button">获取模型</button>
+          <button id="external_lore_source_test_api" type="button" class="menu_button">测试连接</button>
+          <span class="external-lore-dialog-spacer"></span>
+          <button type="button" class="menu_button" data-modal-close>取消</button>
+          <button id="external_lore_source_save_settings" type="button" class="menu_button">保存设置</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function bindSettingsModalEvents(modal) {
+  if (!modal || modal.dataset.boundVersion === EXTENSION_VERSION) {
+    return;
+  }
+  modal.dataset.boundVersion = EXTENSION_VERSION;
+  modal.querySelector("#external_lore_source_add_oc")?.addEventListener("click", addOcWikiBindingFromInput);
+  modal.querySelector("#external_lore_source_add_web")?.addEventListener("click", addExternalSourceFromInput);
+  modal.querySelector("#external_lore_source_save_settings")?.addEventListener("click", saveSettingsModal);
+  modal.querySelector("#external_lore_source_fetch_models")?.addEventListener("click", handleFetchModels);
+  modal.querySelector("#external_lore_source_test_api")?.addEventListener("click", handleTestProcessor);
+  modal.querySelectorAll("[name='external_lore_source_processor_mode']").forEach((node) => {
+    node.addEventListener("change", updateProcessorModePanels);
+  });
+  modal.addEventListener("click", (event) => {
+    if (event.target.closest("[data-modal-close]")) {
+      setSettingsModalOpen(false);
+    }
+  });
+  modal.querySelector("#external_lore_source_test")?.addEventListener("click", async () => {
+    try {
+      const prompt = await fetchContext();
+      updateStatus(prompt ? `上下文已读取：${prompt.length} 字符` : "没有可注入的上下文。");
+    } catch (error) {
+      updateStatus(`上下文读取失败：${error.message}`);
+    }
+  });
+  modal.querySelector("#external_lore_source_bindings")?.addEventListener("click", (event) => {
+    const row = event.target.closest(".external-lore-binding");
+    const action = event.target.dataset.action;
+    if (!row || !action) {
+      return;
+    }
+    const current = settings();
+    const binding = current.bindings.find((item) => item.id === row.dataset.bindingId);
+    if (!binding) {
+      return;
+    }
+    if (action === "remove") {
+      current.bindings = current.bindings.filter((item) => item.id !== binding.id);
+      clearContextPrompt(current);
+    }
+    if (action === "toggle") {
+      binding.enabled = Boolean(event.target.checked);
+      clearContextPrompt(current);
+    }
+    saveSettings();
+    renderBindings();
+    renderPanelSummary();
+  });
+  if (!settingsModalKeydownBound) {
+    settingsModalKeydownBound = true;
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && document.querySelector("#external_lore_source_api_modal")?.classList.contains("is-open")) {
+        setSettingsModalOpen(false);
+      }
+    });
+  }
+}
+
+function ensureSettingsModal() {
+  const modals = [...document.querySelectorAll("#external_lore_source_api_modal")];
+  let modal = modals.find((node) => node.dataset.version === EXTENSION_VERSION) || null;
+  for (const node of modals) {
+    if (node !== modal) {
+      node.remove();
+    }
+  }
+  if (!modal) {
+    document.body?.insertAdjacentHTML("beforeend", settingsModalMarkup());
+    modal = document.querySelector("#external_lore_source_api_modal");
+    if (modal) {
+      modal.dataset.version = EXTENSION_VERSION;
+    }
+  }
+  bindSettingsModalEvents(modal);
+  return modal;
+}
+
 function renderSettings() {
+  ensureSettingsModal();
+  startWorldbookLauncherObserver();
   const host = document.querySelector("#extensions_settings2") || document.querySelector("#extensions_settings");
   if (!host) {
     return;
@@ -1332,6 +1565,7 @@ function renderSettings() {
     renderBindings();
     renderPanelSummary();
   });
+  ensureSettingsModal();
   renderPanelSummary();
   renderBindings();
   startWorldbookLauncherObserver();

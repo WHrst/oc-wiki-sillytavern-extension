@@ -68,7 +68,7 @@ git clone https://github.com/Wellilam/oc-wiki-sillytavern-extension.git public/s
   },
   "client": {
     "name": "External Lore Source",
-    "version": "0.4.2"
+    "version": "0.4.3"
   }
 }
 ```
@@ -163,14 +163,14 @@ SillyTavern 的扩展提示词 API 没有独立的“权重”参数；内置世
 
 ## 从旧版升级
 
-0.3.0 起，扩展显示名改为 **External Lore Source**，但会自动迁移旧的 `OC Wiki Worldbook` 设置。0.4.0 新增整理 API 弹窗、模型获取、测试连接和酒馆主 API 模式。0.4.1 会在新版脚本加载时替换已经存在的旧版设置面板，避免扩展热更新后仍显示旧表单。0.4.2 把来源绑定、API、注入设置和测试入口都收进同一个设置弹窗，并在世界书页面增加快捷按钮。
+0.3.0 起，扩展显示名改为 **External Lore Source**，但会自动迁移旧的 `OC Wiki Worldbook` 设置。0.4.0 新增整理 API 弹窗、模型获取、测试连接和酒馆主 API 模式。0.4.1 会在新版脚本加载时替换已经存在的旧版设置面板，避免扩展热更新后仍显示旧表单。0.4.2 把来源绑定、API、注入设置和测试入口都收进同一个设置弹窗，并在世界书页面增加快捷按钮。0.4.3 会在扩展设置面板渲染前先准备弹窗，并把世界书页入口改成明显的“外置 Lore”按钮。
 
 如果扩展列表显示已经更新，但设置面板仍然是旧界面：
 
-1. 在扩展管理器里再执行一次更新，确认版本至少是 `0.4.2`。
+1. 在扩展管理器里再执行一次更新，确认版本至少是 `0.4.3`。
 2. 重启 SillyTavern 后端，然后在浏览器里硬刷新页面。
 3. 检查 `public/scripts/extensions/third-party/` 下是否有多个旧插件目录；如果有，只保留当前安装器使用的那个。
-4. 新版面板底部状态会显示 `待命 · v0.4.2`。
+4. 新版面板底部状态会显示 `待命 · v0.4.3`。
 
 ## English
 
@@ -182,4 +182,4 @@ Install this repository from SillyTavern's extension installer:
 https://github.com/Wellilam/oc-wiki-sillytavern-extension
 ```
 
-Version 0.4.2 moves source binding, API, injection, and test controls into one modal, and adds a World Info page launcher button.
+Version 0.4.3 keeps the settings modal available before the extension settings panel renders and makes the World Info page launcher a visible "外置 Lore" button near the World Info toolbar.
