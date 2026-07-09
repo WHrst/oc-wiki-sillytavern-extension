@@ -1,0 +1,56 @@
+.oc-wiki-worldbook-panel textarea {
+  min-height: 4.5rem;
+  resize: vertical;
+}
+
+.oc-wiki-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.oc-wiki-status {
+  margin: 0.35rem 0 0.6rem;
+  opacity: 0.82;
+  font-size: 0.9em;
+}
+
+.oc-wiki-bindings {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.oc-wiki-binding {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  padding: 0.45rem;
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 6px;
+}
+
+.oc-wiki-binding-main {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.oc-wiki-binding-main span {
+  display: grid;
+  min-width: 0;
+}
+
+.oc-wiki-binding-main strong,
+.oc-wiki-binding-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oc-wiki-empty {
+  opacity: 0.72;
+  font-size: 0.9em;
+}

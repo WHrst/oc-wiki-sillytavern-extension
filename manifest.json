@@ -1,0 +1,14 @@
+{
+  "display_name": "OC Wiki Worldbook",
+  "loading_order": 50,
+  "dependencies": [],
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "WHrst",
+  "version": "0.1.0",
+  "homePage": "https://github.com/WHrst/oc-wiki-sillytavern-extension",
+  "auto_update": true,
+  "generate_interceptor": "ocWikiWorldbookGenerateInterceptor"
+}
