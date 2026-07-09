@@ -2,14 +2,14 @@
 
 SillyTavern 第三方扩展，用来把 OC Wiki、外部网页、Wiki 页面或资料站整理成外置 lore 上下文，并在生成前通过 SillyTavern 原生扩展提示词注入。
 
-这个仓库只包含 SillyTavern 扩展。OC Wiki 本体源码仍然属于 `WHrst/oc`，不会放进这个插件仓库。
+这个仓库只包含 SillyTavern 扩展。OC Wiki 本体源码仍属于 `WHrst/oc`，不会放进这个插件仓库。
 
 ## 适合做什么
 
 - 在 SillyTavern 里绑定 OC Wiki 的共享条目。
 - 绑定别人发给你的 OC Wiki 分享条目，把它作为当前聊天的外置世界书使用。
-- 绑定普通网页、MediaWiki、百科页面或资料站链接，并交给你配置的整理 API 抓取、清洗、摘要和压缩。
-- 在生成前把整理后的 lore 文本注册为 SillyTavern 原生扩展提示词。
+- 绑定普通网页、MediaWiki、百科页面或资料站链接，并交给配置的整理/抓取 API 处理。
+- 选择使用第三方整理 API，或使用酒馆当前主 API 做 AI 整理。
 - 调整注入位置、深度、角色、顺序，以及是否参与世界书扫描。
 
 ## 安装
@@ -26,43 +26,26 @@ https://github.com/WHrst/oc-wiki-sillytavern-extension
 git clone https://github.com/WHrst/oc-wiki-sillytavern-extension.git public/scripts/extensions/third-party/external-lore-source
 ```
 
-安装后重启 SillyTavern，或刷新扩展页面。
-
-## 从旧版升级
-
-0.3.0 开始，扩展显示名改为 **External Lore Source**，但会自动迁移旧的 `OC Wiki Worldbook` 设置：
-
-- 旧的 OC Wiki 地址会迁移为 `OC Wiki 地址`。
-- 旧的绑定条目会标记为 `OC Wiki` 来源。
-- 旧的注入位置、深度、角色、顺序和世界书扫描设置会保留。
-- 旧的扩展提示词 key 会在下一次生成或禁用时清理。
-
-如果扩展列表显示已经更新，但设置面板仍然是旧界面：
-
-1. 在扩展管理器里再执行一次更新，确认版本至少是 `0.3.0`。
-2. 重启 SillyTavern 后端，然后在浏览器里硬刷新页面。
-3. 检查 `public/scripts/extensions/third-party/` 下是否有多个旧插件目录；如果有，只保留当前安装器使用的那个。
-4. 新版面板底部状态会显示 `待命 · v0.3.0`。
+安装后重启 SillyTavern 后端，或刷新扩展页面。
 
 ## 使用方法
 
 1. 打开 SillyTavern 的扩展设置。
 2. 找到 **External Lore Source**。
-3. 如果只使用 OC Wiki，填写 `OC Wiki 地址`，然后粘贴 OC Wiki 分享链接，例如：
-
-```text
-https://oc.example.com/?share=TOKEN#entry=ENTRY_ID
-```
-
-4. 点击 **绑定 OC Wiki**。
-5. 如果要使用外部网页 / Wiki，先填写 `整理 API` 的 `API 地址`，再粘贴网页链接并点击 **绑定网页**。
-6. 保持扩展开启。生成前，扩展会读取已启用来源，并把整理后的 lore 文本注入当前请求。
+3. 点击 **配置整理 API** 打开配置弹窗。
+4. 选择整理方式：
+   - **第三方整理 API**：外部服务负责抓取、清洗和整理。
+   - **酒馆主 API**：外部服务只返回网页原文，插件再调用当前 SillyTavern 主 API 整理。
+5. 根据需要填写 API 地址、API Key、模型列表 API、模型、语言和 token 预算。
+6. 可以点击 **获取模型**、**测试连接**，确认后点 **保存配置**。
+7. 粘贴 OC Wiki 分享链接或外部网页链接，点击对应的绑定按钮。
+8. 保持扩展开启。生成前，插件会读取已启用来源，并把整理后的 lore 文本注入当前请求。
 
 ## 整理 API
 
-插件本身不在浏览器里抓网页，也不直接调用大模型整理外部网站。这样设计是为了避免 CORS、网页反爬、API Key 暴露和 token 预算失控。
+插件本身不在浏览器里直接抓网页。这样设计是为了避免 CORS、网页反爬、API Key 暴露和 token 预算失控。
 
-你可以配置一个自己的整理 API。插件会向 `API 地址` 发送 `POST` 请求：
+第三方整理 API 模式下，插件会向 `整理 / 抓取 API 地址` 发送 `POST` 请求：
 
 ```json
 {
@@ -77,16 +60,20 @@ https://oc.example.com/?share=TOKEN#entry=ENTRY_ID
   "options": {
     "language": "zh-CN",
     "format": "sillytavern_lore",
-    "maxTokens": 2000
+    "maxTokens": 2000,
+    "mode": "external",
+    "modelProvider": "external",
+    "task": "summarize",
+    "model": "your-model-name"
   },
   "client": {
     "name": "External Lore Source",
-    "version": "0.3.0"
+    "version": "0.4.0"
   }
 }
 ```
 
-如果填写了 `API Key（可选）`，插件会带上：
+如果填写了 `API Key`，插件会带上：
 
 ```text
 Authorization: Bearer <API Key>
@@ -108,6 +95,42 @@ Authorization: Bearer <API Key>
 ```
 
 插件会优先读取 `prompt`，也兼容 `context`、`content`、`text`。如果没有这些字段，则会尝试把 `entries[].content`、`entries[].summary`、`entries[].text` 拼成注入文本。
+
+## 酒馆主 API 模式
+
+选择 **酒馆主 API** 时，插件会把请求的 `options` 改成：
+
+```json
+{
+  "mode": "tavern",
+  "modelProvider": "sillytavern",
+  "task": "extract",
+  "tavern": {
+    "mainApi": "openai",
+    "model": "当前酒馆模型"
+  }
+}
+```
+
+这个模式仍然需要外部抓取 API 返回网页原文，字段可以是 `raw`、`rawText`、`sourceText`、`content`、`text` 或 `entries`。插件拿到原文后，会调用 SillyTavern 暴露的 `generateRaw`，用当前主 API 把资料整理成 lore。
+
+## 模型列表 API
+
+点击 **获取模型** 时，如果填写了 `模型列表 API`，插件会请求该地址；如果没填，会尝试从整理 API 地址推导 `https://host/v1/models`。
+
+兼容返回格式：
+
+```json
+{ "models": ["model-a", "model-b"] }
+```
+
+或 OpenAI 风格：
+
+```json
+{ "data": [{ "id": "model-a" }, { "id": "model-b" }] }
+```
+
+也可以不提供模型列表 API，直接在模型输入框里手动填写模型名。
 
 ## OC Wiki 兼容 API
 
@@ -135,8 +158,19 @@ SillyTavern 的扩展提示词 API 没有独立的“权重”参数；内置世
 ## 共享和权限
 
 - OC Wiki 来源只能读取已经开启分享、并且分享 token 正确的条目。
-- 外部网页 / Wiki 来源的权限、登录态、反爬和抓取规则由你的整理 API 处理。
+- 外部网页 / Wiki 来源的权限、登录态、反爬和抓取规则由整理/抓取 API 处理。
 - 绑定别人发来的 OC Wiki 分享链接时，只能读取那个分享链接允许读取的条目。
+
+## 从旧版升级
+
+0.3.0 起，扩展显示名改为 **External Lore Source**，但会自动迁移旧的 `OC Wiki Worldbook` 设置。0.4.0 新增整理 API 弹窗、模型获取、测试连接和酒馆主 API 模式。
+
+如果扩展列表显示已经更新，但设置面板仍然是旧界面：
+
+1. 在扩展管理器里再执行一次更新，确认版本至少是 `0.4.0`。
+2. 重启 SillyTavern 后端，然后在浏览器里硬刷新页面。
+3. 检查 `public/scripts/extensions/third-party/` 下是否有多个旧插件目录；如果有，只保留当前安装器使用的那个。
+4. 新版面板底部状态会显示 `待命 · v0.4.0`。
 
 ## English
 
@@ -148,4 +182,4 @@ Install this repository from SillyTavern's extension installer:
 https://github.com/WHrst/oc-wiki-sillytavern-extension
 ```
 
-The extension keeps OC Wiki compatibility, and adds a configurable processor API for generic web/wiki URLs. The browser extension does not scrape or summarize websites by itself; your processor API should fetch, clean, summarize, and return a prompt/context string.
+Version 0.4.0 adds a modal API configuration flow, external model fetching, connection testing, and an optional SillyTavern main API summarization mode.

@@ -1,16 +1,21 @@
 const LEGACY_MODULE_NAME = "oc-wiki-worldbook";
 const MODULE_NAME = "external-lore-source";
-const EXTENSION_VERSION = "0.3.0";
+const EXTENSION_VERSION = "0.4.0";
 const PROMPT_KEY_SUFFIX = `_${MODULE_NAME}`;
 const LEGACY_PROMPT_KEY_SUFFIX = `_${LEGACY_MODULE_NAME}`;
 
 const DEFAULT_SETTINGS = {
   enabled: true,
   ocWikiBaseUrl: "",
+  processorMode: "external",
   processorUrl: "",
   processorApiKey: "",
+  processorModelsUrl: "",
+  processorModel: "",
   processorLanguage: "zh-CN",
   maxTokens: 2000,
+  availableModels: [],
+  lastProcessorStatus: "",
   injectionPosition: "in_prompt",
   injectionDepth: 4,
   injectionRole: "system",
@@ -50,6 +55,11 @@ const ROLE_LABELS = Object.freeze({
   system: "系统",
   user: "用户",
   assistant: "助手"
+});
+
+const PROCESSOR_MODES = Object.freeze({
+  external: "第三方整理 API",
+  tavern: "酒馆主 API"
 });
 
 let lastContextNotice = "";
@@ -143,9 +153,16 @@ function settings() {
   current.enabled = current.enabled !== false;
   current.ocWikiBaseUrl = normalizeBaseUrl(current.ocWikiBaseUrl || current.baseUrl || "");
   current.baseUrl = current.ocWikiBaseUrl;
+  current.processorMode = hasOwn(PROCESSOR_MODES, current.processorMode) ? current.processorMode : DEFAULT_SETTINGS.processorMode;
   current.processorUrl = normalizeProcessorUrl(current.processorUrl);
   current.processorApiKey = String(current.processorApiKey || "");
+  current.processorModelsUrl = normalizeProcessorUrl(current.processorModelsUrl);
+  current.processorModel = String(current.processorModel || "").trim();
   current.processorLanguage = String(current.processorLanguage || DEFAULT_SETTINGS.processorLanguage).trim() || DEFAULT_SETTINGS.processorLanguage;
+  current.availableModels = Array.isArray(current.availableModels)
+    ? [...new Set(current.availableModels.map((model) => String(model || "").trim()).filter(Boolean))]
+    : [];
+  current.lastProcessorStatus = String(current.lastProcessorStatus || "");
 
   if (hasOwn(LEGACY_POSITIONS, current.injectionPosition)) {
     if (current.injectionPosition === "before_last" && current.injectionDepth === undefined) {
@@ -296,32 +313,230 @@ function promptFromProcessorData(data) {
     .trim();
 }
 
+function rawTextFromProcessorData(data) {
+  const direct = data?.raw ?? data?.rawText ?? data?.sourceText ?? data?.markdown ?? data?.html ?? data?.content ?? data?.text;
+  if (direct) {
+    return String(direct).trim();
+  }
+  if (!Array.isArray(data?.entries)) {
+    return "";
+  }
+  return data.entries
+    .map((entry) => {
+      const body = entry?.raw ?? entry?.rawText ?? entry?.sourceText ?? entry?.content ?? entry?.summary ?? entry?.text ?? "";
+      if (!body) {
+        return "";
+      }
+      return entry?.title ? `### ${entry.title}\n${body}` : String(body);
+    })
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
+function processorHeaders(current) {
+  const headers = { "Content-Type": "application/json" };
+  if (current.processorApiKey) {
+    headers.Authorization = `Bearer ${current.processorApiKey}`;
+  }
+  return headers;
+}
+
+function tavernModelInfo() {
+  const context = stContext();
+  const mainApi = String(context.mainApi || "unknown");
+  let model = "";
+  try {
+    model = String(context.getChatCompletionModel?.() || "");
+  } catch {
+    model = "";
+  }
+  if (!model) {
+    const chatSettings = context.chatCompletionSettings || {};
+    model = String(
+      chatSettings.model ||
+      chatSettings.openai_model ||
+      chatSettings.chat_completion_model ||
+      chatSettings.custom_model ||
+      chatSettings.reverse_proxy_model ||
+      ""
+    );
+  }
+  return {
+    mainApi,
+    model: model || (mainApi === "openai" ? "当前聊天补全模型" : "当前主 API 模型")
+  };
+}
+
+function processorPayload(current, bindings, extraOptions = {}) {
+  const tavern = tavernModelInfo();
+  const options = {
+    language: current.processorLanguage,
+    format: "sillytavern_lore",
+    maxTokens: current.maxTokens,
+    mode: current.processorMode,
+    modelProvider: current.processorMode === "tavern" ? "sillytavern" : "external",
+    task: current.processorMode === "tavern" ? "extract" : "summarize",
+    ...extraOptions
+  };
+  if (current.processorMode === "external" && current.processorModel) {
+    options.model = current.processorModel;
+  }
+  if (current.processorMode === "tavern") {
+    options.tavern = {
+      mainApi: tavern.mainApi,
+      model: tavern.model
+    };
+  }
+  return {
+    sources: bindings.map(externalSourcePayload),
+    options,
+    client: {
+      name: "External Lore Source",
+      version: EXTENSION_VERSION
+    }
+  };
+}
+
+function suggestedModelsUrl(processorUrl) {
+  try {
+    const url = new URL(processorUrl, window.location.origin);
+    return `${url.origin}/v1/models`;
+  } catch {
+    return "";
+  }
+}
+
+function normalizeModelList(data) {
+  const candidates = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.models)
+      ? data.models
+      : Array.isArray(data?.data)
+        ? data.data
+        : [];
+  return [...new Set(candidates
+    .map((item) => String(item?.id || item?.name || item?.model || item || "").trim())
+    .filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+async function fetchExternalModels(current = settings()) {
+  const modelsUrl = normalizeProcessorUrl(current.processorModelsUrl) || suggestedModelsUrl(current.processorUrl);
+  if (!modelsUrl) {
+    throw new Error("请先填写模型列表 API，或填写可推导 /v1/models 的整理 API 地址。");
+  }
+  const response = await fetch(modelsUrl, {
+    method: "GET",
+    headers: processorHeaders(current)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || data.message || `模型列表 API returned ${response.status}`);
+  }
+  const models = normalizeModelList(data);
+  if (!models.length) {
+    throw new Error("模型列表为空，返回值需要是数组、{ models: [...] } 或 OpenAI 风格 { data: [{ id }] }。");
+  }
+  return models;
+}
+
+async function testProcessorConnection(current = settings()) {
+  if (current.processorMode === "tavern") {
+    const context = stContext();
+    if (typeof context.generateRaw !== "function") {
+      throw new Error("当前 SillyTavern 未暴露 generateRaw，无法使用酒馆主 API 整理。");
+    }
+    const processorUrl = normalizeProcessorUrl(current.processorUrl);
+    if (!processorUrl) {
+      throw new Error("请先填写抓取 API 地址；酒馆主 API 负责整理，网页抓取仍需要外部服务。");
+    }
+    const response = await fetch(processorUrl, {
+      method: "POST",
+      headers: processorHeaders(current),
+      body: JSON.stringify(processorPayload(current, [], { test: true, dryRun: true }))
+    });
+    const text = await response.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { text };
+    }
+    if (!response.ok) {
+      throw new Error(data.error || data.message || text || `抓取 API returned ${response.status}`);
+    }
+    const tavern = tavernModelInfo();
+    return `酒馆主 API 可用：${tavern.mainApi} / ${tavern.model}；抓取服务连接正常。`;
+  }
+
+  const processorUrl = normalizeProcessorUrl(current.processorUrl);
+  if (!processorUrl) {
+    throw new Error("请先填写第三方整理 API 地址。");
+  }
+  const response = await fetch(processorUrl, {
+    method: "POST",
+    headers: processorHeaders(current),
+    body: JSON.stringify(processorPayload(current, [], { test: true, dryRun: true }))
+  });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { text };
+  }
+  if (!response.ok) {
+    throw new Error(data.error || data.message || text || `整理 API returned ${response.status}`);
+  }
+  return data.message || data.status || "第三方整理 API 连接正常。";
+}
+
+async function summarizeWithTavernMainApi(current, data, bindings) {
+  const context = stContext();
+  if (typeof context.generateRaw !== "function") {
+    throw new Error("当前 SillyTavern 未暴露 generateRaw，无法使用酒馆主 API 整理。");
+  }
+  const rawText = rawTextFromProcessorData(data);
+  if (!rawText) {
+    const readyPrompt = promptFromProcessorData(data);
+    if (readyPrompt) {
+      return readyPrompt;
+    }
+    throw new Error("抓取 API 没有返回可交给酒馆主 API 整理的 raw、rawText、sourceText、content、text 或 entries 内容。");
+  }
+  const sourceList = bindings
+    .map((binding) => `- ${binding.title || hostFromUrl(binding.sourceUrl)}：${binding.sourceUrl}`)
+    .join("\n");
+  const systemPrompt = [
+    "你是 SillyTavern 外置世界书整理器。",
+    "请把用户提供的外部资料压缩为可直接注入对话的 lore 上下文。",
+    "保留实体、关系、设定、规则、地点、时间线和重要专有名词；删除网页导航、广告、重复段落和无关说明。",
+    "输出中文，使用清晰短段落；不要写分析过程。"
+  ].join("\n");
+  const prompt = [
+    `语言：${current.processorLanguage}`,
+    `来源：\n${sourceList}`,
+    "原文：",
+    rawText
+  ].join("\n\n");
+  return String(await context.generateRaw({
+    prompt,
+    systemPrompt,
+    responseLength: Math.min(current.maxTokens, 12000)
+  })).trim();
+}
+
 async function fetchExternalContext(current, bindings) {
   const processorUrl = normalizeProcessorUrl(current.processorUrl);
   if (!processorUrl) {
     throw new Error("有外部网页 / Wiki 来源，但还没有配置整理 API 地址。");
   }
 
-  const headers = { "Content-Type": "application/json" };
-  if (current.processorApiKey) {
-    headers.Authorization = `Bearer ${current.processorApiKey}`;
-  }
-
   const response = await fetch(processorUrl, {
     method: "POST",
-    headers,
-    body: JSON.stringify({
-      sources: bindings.map(externalSourcePayload),
-      options: {
-        language: current.processorLanguage,
-        format: "sillytavern_lore",
-        maxTokens: current.maxTokens
-      },
-      client: {
-        name: "External Lore Source",
-        version: EXTENSION_VERSION
-      }
-    })
+    headers: processorHeaders(current),
+    body: JSON.stringify(processorPayload(current, bindings))
   });
 
   const text = await response.text();
@@ -335,7 +550,9 @@ async function fetchExternalContext(current, bindings) {
     throw new Error(data.error || data.message || text || `整理 API returned ${response.status}`);
   }
 
-  const prompt = promptFromProcessorData(data);
+  const prompt = current.processorMode === "tavern"
+    ? await summarizeWithTavernMainApi(current, data, bindings)
+    : promptFromProcessorData(data);
   if (!prompt) {
     throw new Error("整理 API 没有返回 prompt、context、content、text 或 entries 内容。");
   }
@@ -595,6 +812,187 @@ function setContextPrompt(prompt, current) {
   return `${layer}，深度 ${current.injectionDepth}，${role}，顺序 ${current.injectionOrder}，${scan}`;
 }
 
+function processorModeLabel(current = settings()) {
+  return PROCESSOR_MODES[current.processorMode] || PROCESSOR_MODES.external;
+}
+
+function processorModelLabel(current = settings()) {
+  if (current.processorMode === "tavern") {
+    const tavern = tavernModelInfo();
+    return `${tavern.mainApi} / ${tavern.model}`;
+  }
+  return current.processorModel || "未选择模型";
+}
+
+function processorEndpointLabel(current = settings()) {
+  if (current.processorMode === "tavern") {
+    return current.processorUrl ? `抓取服务：${hostFromUrl(current.processorUrl)}` : "需要抓取服务返回网页原文";
+  }
+  return current.processorUrl ? hostFromUrl(current.processorUrl) : "未配置 API 地址";
+}
+
+function renderProcessorSummary() {
+  const current = settings();
+  const mode = document.querySelector("#external_lore_source_processor_mode_summary");
+  const model = document.querySelector("#external_lore_source_processor_model_summary");
+  const endpoint = document.querySelector("#external_lore_source_processor_endpoint_summary");
+  const status = document.querySelector("#external_lore_source_processor_status_summary");
+  if (mode) {
+    mode.textContent = processorModeLabel(current);
+  }
+  if (model) {
+    model.textContent = processorModelLabel(current);
+  }
+  if (endpoint) {
+    endpoint.textContent = processorEndpointLabel(current);
+  }
+  if (status) {
+    status.textContent = current.lastProcessorStatus || "尚未测试";
+  }
+}
+
+function setModalStatus(text, type = "neutral") {
+  const node = document.querySelector("#external_lore_source_api_modal_status");
+  if (!node) {
+    return;
+  }
+  node.textContent = text;
+  node.dataset.type = type;
+}
+
+function setProcessorModalOpen(open) {
+  const modal = document.querySelector("#external_lore_source_api_modal");
+  if (!modal) {
+    return;
+  }
+  modal.classList.toggle("is-open", open);
+  modal.setAttribute("aria-hidden", open ? "false" : "true");
+  if (open) {
+    populateProcessorModal();
+    document.querySelector("#external_lore_source_processor_mode_external")?.focus();
+  }
+}
+
+function renderExternalModelList(models, selected) {
+  const list = document.querySelector("#external_lore_source_model_list");
+  const input = document.querySelector("#external_lore_source_processor_model");
+  if (!list || !input) {
+    return;
+  }
+  const normalized = [...new Set([selected, ...models].map((model) => String(model || "").trim()).filter(Boolean))];
+  list.innerHTML = normalized.map((model) => `<option value="${escapeHtml(model)}"></option>`).join("");
+  input.value = selected || "";
+}
+
+function populateProcessorModal() {
+  const current = settings();
+  const externalRadio = document.querySelector("#external_lore_source_processor_mode_external");
+  const tavernRadio = document.querySelector("#external_lore_source_processor_mode_tavern");
+  if (externalRadio) {
+    externalRadio.checked = current.processorMode === "external";
+  }
+  if (tavernRadio) {
+    tavernRadio.checked = current.processorMode === "tavern";
+  }
+  const fields = {
+    "#external_lore_source_processor_url": current.processorUrl,
+    "#external_lore_source_processor_key": current.processorApiKey,
+    "#external_lore_source_processor_models_url": current.processorModelsUrl,
+    "#external_lore_source_language": current.processorLanguage,
+    "#external_lore_source_max_tokens": current.maxTokens
+  };
+  for (const [selector, value] of Object.entries(fields)) {
+    const node = document.querySelector(selector);
+    if (node) {
+      node.value = value;
+    }
+  }
+  renderExternalModelList(current.availableModels, current.processorModel);
+  const tavern = tavernModelInfo();
+  const tavernMainApi = document.querySelector("#external_lore_source_tavern_main_api");
+  const tavernModel = document.querySelector("#external_lore_source_tavern_model");
+  if (tavernMainApi) {
+    tavernMainApi.value = tavern.mainApi;
+  }
+  if (tavernModel) {
+    tavernModel.value = tavern.model;
+  }
+  updateProcessorModePanels();
+  setModalStatus(current.lastProcessorStatus || "配置后点击保存，测试连接不会自动保存草稿。");
+}
+
+function updateProcessorModePanels() {
+  const mode = document.querySelector("#external_lore_source_processor_mode_tavern")?.checked ? "tavern" : "external";
+  for (const panel of document.querySelectorAll("[data-processor-panel]")) {
+    panel.hidden = panel.dataset.processorPanel !== mode;
+  }
+}
+
+function saveProcessorModal() {
+  const current = settings();
+  current.processorMode = document.querySelector("#external_lore_source_processor_mode_tavern")?.checked ? "tavern" : "external";
+  current.processorUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_url")?.value);
+  current.processorApiKey = String(document.querySelector("#external_lore_source_processor_key")?.value || "");
+  current.processorModelsUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_models_url")?.value);
+  current.processorModel = String(document.querySelector("#external_lore_source_processor_model")?.value || "").trim();
+  current.processorLanguage = String(document.querySelector("#external_lore_source_language")?.value || DEFAULT_SETTINGS.processorLanguage).trim() || DEFAULT_SETTINGS.processorLanguage;
+  current.maxTokens = clampInteger(document.querySelector("#external_lore_source_max_tokens")?.value, DEFAULT_SETTINGS.maxTokens, 100, 200000);
+  const models = normalizeModelList(current.availableModels);
+  if (current.processorModel && !models.includes(current.processorModel)) {
+    models.unshift(current.processorModel);
+  }
+  current.availableModels = models;
+  saveSettings();
+  renderProcessorSummary();
+  setProcessorModalOpen(false);
+  updateStatus("整理 API 配置已保存。");
+}
+
+async function handleFetchModels() {
+  const current = settings();
+  current.processorUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_url")?.value);
+  current.processorApiKey = String(document.querySelector("#external_lore_source_processor_key")?.value || "");
+  current.processorModelsUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_models_url")?.value);
+  setModalStatus("正在获取模型列表...");
+  try {
+    const models = await fetchExternalModels(current);
+    current.availableModels = models;
+    if (!current.processorModel && models.length) {
+      current.processorModel = models[0];
+    }
+    renderExternalModelList(models, current.processorModel);
+    saveSettings();
+    setModalStatus(`已获取 ${models.length} 个模型。`, "success");
+    renderProcessorSummary();
+  } catch (error) {
+    setModalStatus(`获取失败：${error.message}`, "error");
+  }
+}
+
+async function handleTestProcessor() {
+  const current = settings();
+  current.processorMode = document.querySelector("#external_lore_source_processor_mode_tavern")?.checked ? "tavern" : "external";
+  current.processorUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_url")?.value);
+  current.processorApiKey = String(document.querySelector("#external_lore_source_processor_key")?.value || "");
+  current.processorModelsUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_models_url")?.value);
+  current.processorModel = String(document.querySelector("#external_lore_source_processor_model")?.value || "").trim();
+  current.processorLanguage = String(document.querySelector("#external_lore_source_language")?.value || DEFAULT_SETTINGS.processorLanguage).trim() || DEFAULT_SETTINGS.processorLanguage;
+  current.maxTokens = clampInteger(document.querySelector("#external_lore_source_max_tokens")?.value, DEFAULT_SETTINGS.maxTokens, 100, 200000);
+  setModalStatus("正在测试连接...");
+  try {
+    const message = await testProcessorConnection(current);
+    current.lastProcessorStatus = `${message}`;
+    saveSettings();
+    setModalStatus(current.lastProcessorStatus, "success");
+    renderProcessorSummary();
+  } catch (error) {
+    current.lastProcessorStatus = `测试失败：${error.message}`;
+    saveSettings();
+    setModalStatus(current.lastProcessorStatus, "error");
+    renderProcessorSummary();
+  }
+}
+
 function renderSettings() {
   const host = document.querySelector("#extensions_settings2") || document.querySelector("#extensions_settings");
   if (!host || document.querySelector("#external_lore_source_panel")) {
@@ -615,27 +1013,30 @@ function renderSettings() {
           </label>
 
           <div class="external-lore-section">
-            <div class="external-lore-section-title">整理 API</div>
-            <label>
-              API 地址
-              <input id="external_lore_source_processor_url" class="text_pole" type="url" placeholder="https://api.example.com/lore/context" value="${escapeHtml(current.processorUrl)}">
-            </label>
-            <div class="external-lore-setting-grid">
-              <label>
-                API Key（可选）
-                <input id="external_lore_source_processor_key" class="text_pole" type="password" autocomplete="off" value="${escapeHtml(current.processorApiKey)}">
-              </label>
-              <label>
-                语言
-                <input id="external_lore_source_language" class="text_pole" type="text" value="${escapeHtml(current.processorLanguage)}">
-              </label>
-              <label>
-                预算 token
-                <input id="external_lore_source_max_tokens" class="text_pole" type="number" min="100" max="200000" step="100" value="${current.maxTokens}">
-              </label>
-            </div>
-            <div class="external-lore-help">
-              外部网页 / Wiki 会交给这个 API 抓取、清洗和整理；插件只负责把返回的 lore 文本注入 SillyTavern。
+            <div class="external-lore-section-title">整理配置</div>
+            <div class="external-lore-config-card">
+              <div class="external-lore-config-grid">
+                <div>
+                  <span>整理方式</span>
+                  <strong id="external_lore_source_processor_mode_summary">${escapeHtml(processorModeLabel(current))}</strong>
+                </div>
+                <div>
+                  <span>模型</span>
+                  <strong id="external_lore_source_processor_model_summary">${escapeHtml(processorModelLabel(current))}</strong>
+                </div>
+                <div>
+                  <span>接口</span>
+                  <strong id="external_lore_source_processor_endpoint_summary">${escapeHtml(processorEndpointLabel(current))}</strong>
+                </div>
+                <div>
+                  <span>状态</span>
+                  <strong id="external_lore_source_processor_status_summary">${escapeHtml(current.lastProcessorStatus || "尚未测试")}</strong>
+                </div>
+              </div>
+              <div class="external-lore-config-actions">
+                <button id="external_lore_source_configure_api" type="button" class="menu_button">配置整理 API</button>
+                <button id="external_lore_source_test" type="button" class="menu_button">测试上下文</button>
+              </div>
             </div>
           </div>
 
@@ -697,11 +1098,104 @@ function renderSettings() {
             </div>
           </div>
 
-          <div class="external-lore-actions">
-            <button id="external_lore_source_test" type="button" class="menu_button">测试上下文</button>
-          </div>
           <div id="external_lore_source_status" class="external-lore-status">待命 · v${EXTENSION_VERSION}</div>
           <div id="external_lore_source_bindings" class="external-lore-bindings"></div>
+        </div>
+      </div>
+
+      <div id="external_lore_source_api_modal" class="external-lore-modal" aria-hidden="true">
+        <div class="external-lore-modal-backdrop" data-modal-close></div>
+        <div class="external-lore-dialog" role="dialog" aria-modal="true" aria-labelledby="external_lore_source_api_modal_title">
+          <div class="external-lore-dialog-header">
+            <div>
+              <div id="external_lore_source_api_modal_title" class="external-lore-dialog-title">整理 API 配置</div>
+              <div class="external-lore-dialog-subtitle">选择网页资料交给谁抓取、谁整理，以及整理时使用的模型。</div>
+            </div>
+            <button type="button" class="menu_button external-lore-icon-button" data-modal-close aria-label="关闭">×</button>
+          </div>
+
+          <div class="external-lore-mode-switch" role="radiogroup" aria-label="整理方式">
+            <label>
+              <input id="external_lore_source_processor_mode_external" type="radio" name="external_lore_source_processor_mode" value="external">
+              <span>
+                <strong>第三方整理 API</strong>
+                <small>外部服务负责抓取、清洗和整理。</small>
+              </span>
+            </label>
+            <label>
+              <input id="external_lore_source_processor_mode_tavern" type="radio" name="external_lore_source_processor_mode" value="tavern">
+              <span>
+                <strong>酒馆主 API</strong>
+                <small>外部服务只取网页原文，由当前 SillyTavern 主模型整理。</small>
+              </span>
+            </label>
+          </div>
+
+          <div class="external-lore-modal-body">
+            <div class="external-lore-form-grid">
+              <label>
+                整理 / 抓取 API 地址
+                <input id="external_lore_source_processor_url" class="text_pole" type="url" placeholder="https://api.example.com/lore/context">
+              </label>
+              <label>
+                API Key（可选）
+                <input id="external_lore_source_processor_key" class="text_pole" type="password" autocomplete="off">
+              </label>
+              <label>
+                语言
+                <input id="external_lore_source_language" class="text_pole" type="text" placeholder="zh-CN">
+              </label>
+              <label>
+                预算 token
+                <input id="external_lore_source_max_tokens" class="text_pole" type="number" min="100" max="200000" step="100">
+              </label>
+            </div>
+
+            <div data-processor-panel="external" class="external-lore-processor-panel">
+              <div class="external-lore-section-title">第三方模型</div>
+              <div class="external-lore-form-grid">
+                <label>
+                  模型列表 API（可选）
+                  <input id="external_lore_source_processor_models_url" class="text_pole" type="url" placeholder="留空时尝试 /v1/models">
+                </label>
+                <label>
+                  使用模型
+                  <input id="external_lore_source_processor_model" class="text_pole" type="text" list="external_lore_source_model_list" placeholder="手动输入或获取模型">
+                  <datalist id="external_lore_source_model_list"></datalist>
+                </label>
+              </div>
+              <div class="external-lore-help">
+                获取模型兼容 OpenAI 风格 <code>{ data: [{ id }] }</code>，也兼容 <code>{ models: [...] }</code>。
+              </div>
+            </div>
+
+            <div data-processor-panel="tavern" class="external-lore-processor-panel" hidden>
+              <div class="external-lore-section-title">酒馆当前主 API</div>
+              <div class="external-lore-form-grid">
+                <label>
+                  当前 API
+                  <input id="external_lore_source_tavern_main_api" class="text_pole" type="text" readonly>
+                </label>
+                <label>
+                  当前模型
+                  <input id="external_lore_source_tavern_model" class="text_pole" type="text" readonly>
+                </label>
+              </div>
+              <div class="external-lore-help">
+                这个模式仍需要上面的抓取 API 返回网页原文；插件再调用 SillyTavern 的 <code>generateRaw</code> 整理为 lore。
+              </div>
+            </div>
+          </div>
+
+          <div id="external_lore_source_api_modal_status" class="external-lore-modal-status" data-type="neutral">配置后点击保存。</div>
+
+          <div class="external-lore-dialog-actions">
+            <button id="external_lore_source_fetch_models" type="button" class="menu_button">获取模型</button>
+            <button id="external_lore_source_test_api" type="button" class="menu_button">测试连接</button>
+            <span class="external-lore-dialog-spacer"></span>
+            <button type="button" class="menu_button" data-modal-close>取消</button>
+            <button id="external_lore_source_save_api" type="button" class="menu_button">保存配置</button>
+          </div>
         </div>
       </div>
     </div>
@@ -719,24 +1213,6 @@ function renderSettings() {
     const currentSettings = settings();
     currentSettings.ocWikiBaseUrl = normalizeBaseUrl(event.target.value);
     currentSettings.baseUrl = currentSettings.ocWikiBaseUrl;
-    saveSettings();
-  });
-  document.querySelector("#external_lore_source_processor_url")?.addEventListener("input", (event) => {
-    settings().processorUrl = normalizeProcessorUrl(event.target.value);
-    saveSettings();
-  });
-  document.querySelector("#external_lore_source_processor_key")?.addEventListener("input", (event) => {
-    settings().processorApiKey = String(event.target.value || "");
-    saveSettings();
-  });
-  document.querySelector("#external_lore_source_language")?.addEventListener("input", (event) => {
-    settings().processorLanguage = String(event.target.value || DEFAULT_SETTINGS.processorLanguage).trim() || DEFAULT_SETTINGS.processorLanguage;
-    saveSettings();
-  });
-  document.querySelector("#external_lore_source_max_tokens")?.addEventListener("input", (event) => {
-    const currentSettings = settings();
-    currentSettings.maxTokens = clampInteger(event.target.value, DEFAULT_SETTINGS.maxTokens, 100, 200000);
-    event.target.value = currentSettings.maxTokens;
     saveSettings();
   });
   document.querySelector("#external_lore_source_injection_position")?.addEventListener("change", (event) => {
@@ -773,6 +1249,23 @@ function renderSettings() {
   });
   document.querySelector("#external_lore_source_add_oc")?.addEventListener("click", addOcWikiBindingFromInput);
   document.querySelector("#external_lore_source_add_web")?.addEventListener("click", addExternalSourceFromInput);
+  document.querySelector("#external_lore_source_configure_api")?.addEventListener("click", () => setProcessorModalOpen(true));
+  document.querySelector("#external_lore_source_save_api")?.addEventListener("click", saveProcessorModal);
+  document.querySelector("#external_lore_source_fetch_models")?.addEventListener("click", handleFetchModels);
+  document.querySelector("#external_lore_source_test_api")?.addEventListener("click", handleTestProcessor);
+  document.querySelectorAll("[name='external_lore_source_processor_mode']").forEach((node) => {
+    node.addEventListener("change", updateProcessorModePanels);
+  });
+  document.querySelector("#external_lore_source_api_modal")?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-modal-close]")) {
+      setProcessorModalOpen(false);
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && document.querySelector("#external_lore_source_api_modal")?.classList.contains("is-open")) {
+      setProcessorModalOpen(false);
+    }
+  });
   document.querySelector("#external_lore_source_test")?.addEventListener("click", async () => {
     try {
       const prompt = await fetchContext();
@@ -803,6 +1296,7 @@ function renderSettings() {
     saveSettings();
     renderBindings();
   });
+  renderProcessorSummary();
   renderBindings();
 }
 
