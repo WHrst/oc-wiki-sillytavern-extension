@@ -1,6 +1,6 @@
 const LEGACY_MODULE_NAME = "oc-wiki-worldbook";
 const MODULE_NAME = "external-lore-source";
-const EXTENSION_VERSION = "0.4.0";
+const EXTENSION_VERSION = "0.4.1";
 const PROMPT_KEY_SUFFIX = `_${MODULE_NAME}`;
 const LEGACY_PROMPT_KEY_SUFFIX = `_${LEGACY_MODULE_NAME}`;
 
@@ -995,12 +995,17 @@ async function handleTestProcessor() {
 
 function renderSettings() {
   const host = document.querySelector("#extensions_settings2") || document.querySelector("#extensions_settings");
-  if (!host || document.querySelector("#external_lore_source_panel")) {
+  if (!host) {
     return;
   }
+  const existingPanel = document.querySelector("#external_lore_source_panel");
+  if (existingPanel?.dataset.version === EXTENSION_VERSION) {
+    return;
+  }
+  existingPanel?.remove();
   const current = settings();
   host.insertAdjacentHTML("beforeend", `
-    <div id="external_lore_source_panel" class="external-lore-panel">
+    <div id="external_lore_source_panel" class="external-lore-panel" data-version="${EXTENSION_VERSION}">
       <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
           <b>External Lore Source</b>

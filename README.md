@@ -163,14 +163,14 @@ SillyTavern 的扩展提示词 API 没有独立的“权重”参数；内置世
 
 ## 从旧版升级
 
-0.3.0 起，扩展显示名改为 **External Lore Source**，但会自动迁移旧的 `OC Wiki Worldbook` 设置。0.4.0 新增整理 API 弹窗、模型获取、测试连接和酒馆主 API 模式。
+0.3.0 起，扩展显示名改为 **External Lore Source**，但会自动迁移旧的 `OC Wiki Worldbook` 设置。0.4.0 新增整理 API 弹窗、模型获取、测试连接和酒馆主 API 模式。0.4.1 会在新版脚本加载时替换已经存在的旧版设置面板，避免扩展热更新后仍显示旧表单。
 
 如果扩展列表显示已经更新，但设置面板仍然是旧界面：
 
-1. 在扩展管理器里再执行一次更新，确认版本至少是 `0.4.0`。
+1. 在扩展管理器里再执行一次更新，确认版本至少是 `0.4.1`。
 2. 重启 SillyTavern 后端，然后在浏览器里硬刷新页面。
 3. 检查 `public/scripts/extensions/third-party/` 下是否有多个旧插件目录；如果有，只保留当前安装器使用的那个。
-4. 新版面板底部状态会显示 `待命 · v0.4.0`。
+4. 新版面板底部状态会显示 `待命 · v0.4.1`。
 
 ## English
 
@@ -182,4 +182,4 @@ Install this repository from SillyTavern's extension installer:
 https://github.com/WHrst/oc-wiki-sillytavern-extension
 ```
 
-Version 0.4.0 adds a modal API configuration flow, external model fetching, connection testing, and an optional SillyTavern main API summarization mode.
+Version 0.4.1 adds a modal API configuration flow, external model fetching, connection testing, an optional SillyTavern main API summarization mode, and replacement of stale settings panels after hot updates.
