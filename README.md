@@ -25,6 +25,17 @@ git clone https://github.com/WHrst/oc-wiki-sillytavern-extension.git public/scri
 
 安装后重启 SillyTavern，或刷新扩展页面。
 
+## 更新后还是英文？
+
+0.2.1 开始，插件的脚本和样式都带版本参数，例如 `index.js?v=0.2.1`，用来绕过浏览器的模块缓存。
+
+如果扩展列表显示已经是新版，但设置面板仍然是 `Enabled / Share link / Bind share link` 这套旧英文界面：
+
+1. 在扩展管理器里再执行一次更新，确认版本至少是 `0.2.1`。
+2. 重启 SillyTavern 后端，然后在浏览器里硬刷新页面。
+3. 检查 `public/scripts/extensions/third-party/` 下是否有两个 OC Wiki 插件目录；如果有，只保留当前安装器使用的那个。
+4. 新版面板底部状态会显示 `待命 · v0.2.1`。如果没有这个版本号，说明浏览器仍在运行旧脚本。
+
 ## 使用方法
 
 1. 打开 SillyTavern 的扩展设置。

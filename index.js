@@ -1,4 +1,5 @@
 const MODULE_NAME = "oc-wiki-worldbook";
+const EXTENSION_VERSION = "0.2.1";
 const PROMPT_KEY_SUFFIX = `_${MODULE_NAME}`;
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -376,7 +377,7 @@ function renderSettings() {
             <button id="oc_wiki_worldbook_add" type="button" class="menu_button">绑定分享链接</button>
             <button id="oc_wiki_worldbook_test" type="button" class="menu_button">测试上下文</button>
           </div>
-          <div id="oc_wiki_worldbook_status" class="oc-wiki-status">待命</div>
+          <div id="oc_wiki_worldbook_status" class="oc-wiki-status">待命 · v${EXTENSION_VERSION}</div>
           <div id="oc_wiki_worldbook_bindings" class="oc-wiki-bindings"></div>
         </div>
       </div>
