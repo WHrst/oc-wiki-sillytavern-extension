@@ -1,6 +1,6 @@
 const LEGACY_MODULE_NAME = "oc-wiki-worldbook";
 const MODULE_NAME = "external-lore-source";
-const EXTENSION_VERSION = "0.4.5";
+const EXTENSION_VERSION = "0.4.6";
 const PROMPT_KEY_SUFFIX = `_${MODULE_NAME}`;
 const LEGACY_PROMPT_KEY_SUFFIX = `_${LEGACY_MODULE_NAME}`;
 
@@ -9,6 +9,8 @@ const DEFAULT_SETTINGS = {
   ocWikiBaseUrl: "",
   processorMode: "external",
   processorUrl: "",
+  processorFetchApiKey: "",
+  processorAiUrl: "",
   processorApiKey: "",
   processorModelsUrl: "",
   processorModel: "",
@@ -58,8 +60,8 @@ const ROLE_LABELS = Object.freeze({
 });
 
 const PROCESSOR_MODES = Object.freeze({
-  external: "第三方整理 API",
-  tavern: "酒馆主 API"
+  external: "第三方 API",
+  tavern: "主 API"
 });
 
 let lastContextNotice = "";
@@ -115,7 +117,17 @@ function normalizeBaseUrl(value) {
 }
 
 function normalizeProcessorUrl(value) {
-  return String(value || "").trim();
+  const input = String(value || "").trim();
+  if (!input) {
+    return "";
+  }
+  if (/^(\/|\.\/|\.\.\/)/.test(input) || /^[a-z][a-z\d+.-]*:\/\//i.test(input)) {
+    return input;
+  }
+  if (/^(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.|192\.168\.|\[?::1(?::|\])?)/i.test(input)) {
+    return `http://${input}`;
+  }
+  return `https://${input}`;
 }
 
 function hostFromUrl(value) {
@@ -165,6 +177,8 @@ function settings() {
   current.baseUrl = current.ocWikiBaseUrl;
   current.processorMode = hasOwn(PROCESSOR_MODES, current.processorMode) ? current.processorMode : DEFAULT_SETTINGS.processorMode;
   current.processorUrl = normalizeProcessorUrl(current.processorUrl);
+  current.processorFetchApiKey = String(current.processorFetchApiKey || "");
+  current.processorAiUrl = normalizeProcessorUrl(current.processorAiUrl);
   current.processorApiKey = String(current.processorApiKey || "");
   current.processorModelsUrl = normalizeProcessorUrl(current.processorModelsUrl);
   current.processorModel = String(current.processorModel || "").trim();
@@ -344,7 +358,16 @@ function rawTextFromProcessorData(data) {
     .trim();
 }
 
-function processorHeaders(current) {
+function fetcherHeaders(current) {
+  const headers = { "Content-Type": "application/json" };
+  const token = current.processorFetchApiKey || (!current.processorAiUrl ? current.processorApiKey : "");
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+function externalAiHeaders(current) {
   const headers = { "Content-Type": "application/json" };
   if (current.processorApiKey) {
     headers.Authorization = `Bearer ${current.processorApiKey}`;
@@ -408,10 +431,44 @@ function processorPayload(current, bindings, extraOptions = {}) {
   };
 }
 
+function openAiCompatibleEndpoint(baseUrl, endpoint) {
+  const input = normalizeProcessorUrl(baseUrl);
+  if (!input) {
+    return "";
+  }
+  try {
+    const url = new URL(input, window.location.origin);
+    const path = url.pathname.replace(/\/+$/, "");
+    if (endpoint === "chat/completions" && path.endsWith("/chat/completions")) {
+      return url.toString();
+    }
+    if (endpoint === "models" && path.endsWith("/models")) {
+      return url.toString();
+    }
+    if (endpoint === "models" && path.endsWith("/chat/completions")) {
+      url.pathname = path.replace(/\/chat\/completions$/, "/models");
+      return url.toString();
+    }
+    const suffix = path === "" || path === "/" ? `/v1/${endpoint}` : `${path}/${endpoint}`;
+    url.pathname = suffix.replace(/\/{2,}/g, "/");
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 function suggestedModelsUrl(processorUrl) {
   try {
     const url = new URL(processorUrl, window.location.origin);
-    return `${url.origin}/v1/models`;
+    const path = url.pathname.replace(/\/+$/, "");
+    if (path.endsWith("/models")) {
+      return url.toString();
+    }
+    if (path.endsWith("/chat/completions")) {
+      url.pathname = path.replace(/\/chat\/completions$/, "/models");
+      return url.toString();
+    }
+    return openAiCompatibleEndpoint(url.toString(), "models");
   } catch {
     return "";
   }
@@ -432,13 +489,16 @@ function normalizeModelList(data) {
 }
 
 async function fetchExternalModels(current = settings()) {
-  const modelsUrl = normalizeProcessorUrl(current.processorModelsUrl) || suggestedModelsUrl(current.processorUrl);
+  if (current.processorMode === "tavern") {
+    throw new Error("酒馆主 API 使用当前聊天模型，不需要获取模型列表。");
+  }
+  const modelsUrl = normalizeProcessorUrl(current.processorModelsUrl) || suggestedModelsUrl(current.processorAiUrl);
   if (!modelsUrl) {
-    throw new Error("请先填写模型列表 API，或填写可推导 /v1/models 的整理 API 地址。");
+    throw new Error("请先填写模型列表 API，或填写可推导 /models 的第三方聊天 API 地址。");
   }
   const response = await fetch(modelsUrl, {
     method: "GET",
-    headers: processorHeaders(current)
+    headers: externalAiHeaders(current)
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -446,9 +506,104 @@ async function fetchExternalModels(current = settings()) {
   }
   const models = normalizeModelList(data);
   if (!models.length) {
-    throw new Error("模型列表为空，返回值需要是数组、{ models: [...] } 或 OpenAI 风格 { data: [{ id }] }。");
+    throw new Error("模型列表为空，返回值需要是数组、{ models: [...] } 或常见兼容格式 { data: [{ id }] }。");
   }
   return models;
+}
+
+function buildLoreSummaryMessages(current, rawText, bindings) {
+  const sourceList = bindings
+    .map((binding) => `- ${binding.title || hostFromUrl(binding.sourceUrl)}：${binding.sourceUrl}`)
+    .join("\n");
+  const systemPrompt = [
+    "你是 SillyTavern 外置世界书整理器。",
+    "请把用户提供的外部资料压缩为可直接注入对话的 lore 上下文。",
+    "保留实体、关系、设定、规则、地点、时间线和重要专有名词；删除网页导航、广告、重复段落和无关说明。",
+    "输出中文，使用清晰短段落；不要写分析过程。"
+  ].join("\n");
+  const prompt = [
+    `语言：${current.processorLanguage}`,
+    `来源：\n${sourceList}`,
+    "原文：",
+    rawText
+  ].join("\n\n");
+  return [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: prompt }
+  ];
+}
+
+async function summarizeWithExternalAiApi(current, rawText, bindings) {
+  if (!String(rawText || "").trim()) {
+    throw new Error("抓取 API 没有返回可交给第三方 API 整理的原文。");
+  }
+  const endpoint = openAiCompatibleEndpoint(current.processorAiUrl, "chat/completions");
+  if (!endpoint) {
+    throw new Error("请先填写聊天补全 API 地址，例如 https://api.example.com/v1 或完整 /chat/completions 地址。");
+  }
+  if (!current.processorModel) {
+    throw new Error("请先填写或获取第三方 API 的使用模型。");
+  }
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: externalAiHeaders(current),
+    body: JSON.stringify({
+      model: current.processorModel,
+      messages: buildLoreSummaryMessages(current, rawText, bindings),
+      max_tokens: current.maxTokens,
+      temperature: 0.2
+    })
+  });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { text };
+  }
+  if (!response.ok) {
+    throw new Error(data.error?.message || data.error || data.message || text || `第三方 API returned ${response.status}`);
+  }
+  const message = data.choices?.[0]?.message?.content || data.choices?.[0]?.text || data.output_text || data.text || "";
+  if (!message.trim()) {
+    throw new Error("第三方 API 没有返回可用文本。");
+  }
+  return String(message).trim();
+}
+
+async function testExternalAiConnection(current) {
+  if (!current.processorModel) {
+    const models = await fetchExternalModels(current);
+    return models.length ? `第三方 API 可用，获取到 ${models.length} 个模型。` : "第三方 API 可用，但没有返回模型列表。";
+  }
+  const endpoint = openAiCompatibleEndpoint(current.processorAiUrl, "chat/completions");
+  if (!endpoint) {
+    throw new Error("请先填写聊天补全 API 地址，例如 https://api.example.com/v1 或完整 /chat/completions 地址。");
+  }
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: externalAiHeaders(current),
+    body: JSON.stringify({
+      model: current.processorModel,
+      messages: [
+        { role: "system", content: "只回复 OK。" },
+        { role: "user", content: "连接测试" }
+      ],
+      max_tokens: 8,
+      temperature: 0
+    })
+  });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { text };
+  }
+  if (!response.ok) {
+    throw new Error(data.error?.message || data.error || data.message || text || `第三方 API returned ${response.status}`);
+  }
+  return `第三方 API 可用：${current.processorModel}。`;
 }
 
 async function testProcessorConnection(current = settings()) {
@@ -462,7 +617,7 @@ async function testProcessorConnection(current = settings()) {
     }
     const response = await fetch(processorUrl, {
       method: "POST",
-      headers: processorHeaders(current),
+      headers: fetcherHeaders(current),
       body: JSON.stringify(processorPayload(current, [], { test: true, dryRun: true }))
     });
     const text = await response.text();
@@ -479,13 +634,17 @@ async function testProcessorConnection(current = settings()) {
     return `酒馆主 API 可用：${tavern.mainApi} / ${tavern.model}；抓取服务连接正常。`;
   }
 
+  if (current.processorAiUrl) {
+    return testExternalAiConnection(current);
+  }
+
   const processorUrl = normalizeProcessorUrl(current.processorUrl);
   if (!processorUrl) {
-    throw new Error("请先填写第三方整理 API 地址。");
+    throw new Error("请先填写聊天补全 API 地址，或填写旧版一体化整理 API 地址。");
   }
   const response = await fetch(processorUrl, {
     method: "POST",
-    headers: processorHeaders(current),
+    headers: fetcherHeaders(current),
     body: JSON.stringify(processorPayload(current, [], { test: true, dryRun: true }))
   });
   const text = await response.text();
@@ -498,7 +657,7 @@ async function testProcessorConnection(current = settings()) {
   if (!response.ok) {
     throw new Error(data.error || data.message || text || `整理 API returned ${response.status}`);
   }
-  return data.message || data.status || "第三方整理 API 连接正常。";
+  return data.message || data.status || "旧版一体化整理 API 连接正常。";
 }
 
 async function generateWithTavernMainApi(systemPrompt, prompt, responseLength) {
@@ -574,12 +733,12 @@ async function summarizeWithTavernMainApi(current, data, bindings) {
 async function fetchExternalContext(current, bindings) {
   const processorUrl = normalizeProcessorUrl(current.processorUrl);
   if (!processorUrl) {
-    throw new Error("有外部网页 / Wiki 来源，但还没有配置整理 API 地址。");
+    throw new Error("有外部网页 / Wiki 来源，但还没有配置网页抓取 API 地址。");
   }
 
   const response = await fetch(processorUrl, {
     method: "POST",
-    headers: processorHeaders(current),
+    headers: fetcherHeaders(current),
     body: JSON.stringify(processorPayload(current, bindings))
   });
 
@@ -596,7 +755,9 @@ async function fetchExternalContext(current, bindings) {
 
   const prompt = current.processorMode === "tavern"
     ? await summarizeWithTavernMainApi(current, data, bindings)
-    : promptFromProcessorData(data);
+    : current.processorAiUrl
+      ? await summarizeWithExternalAiApi(current, rawTextFromProcessorData(data) || promptFromProcessorData(data), bindings)
+      : promptFromProcessorData(data);
   if (!prompt) {
     throw new Error("整理 API 没有返回 prompt、context、content、text 或 entries 内容。");
   }
@@ -805,7 +966,7 @@ function addExternalSourceFromInput() {
   saveSettings();
   renderBindings();
   renderPanelSummary();
-  updateStatus(current.processorUrl ? `已绑定网页：${hostFromUrl(sourceUrl)}` : "已绑定网页；生成前需要先配置整理 API 地址。");
+  updateStatus(current.processorUrl ? `已绑定网页：${hostFromUrl(sourceUrl)}` : "已绑定网页；生成前需要先配置网页抓取 API 地址。");
 }
 
 function promptKey(current) {
@@ -878,7 +1039,10 @@ function processorEndpointLabel(current = settings()) {
   if (current.processorMode === "tavern") {
     return current.processorUrl ? `抓取服务：${hostFromUrl(current.processorUrl)}` : "需要抓取服务返回网页原文";
   }
-  return current.processorUrl ? hostFromUrl(current.processorUrl) : "未配置 API 地址";
+  if (current.processorAiUrl) {
+    return `第三方 API：${hostFromUrl(current.processorAiUrl)}`;
+  }
+  return current.processorUrl ? `一体化 API：${hostFromUrl(current.processorUrl)}` : "未配置 API 地址";
 }
 
 function renderPanelSummary() {
@@ -908,7 +1072,7 @@ function setSettingsModalOpen(open) {
   modal.setAttribute("aria-hidden", open ? "false" : "true");
   if (open) {
     populateSettingsModal();
-    document.querySelector("#external_lore_source_processor_mode_external")?.focus();
+    document.querySelector("#external_lore_source_processor_mode")?.focus();
   }
 }
 
@@ -991,8 +1155,12 @@ function renderExternalModelList(models, selected) {
 
 function populateSettingsModal() {
   const current = settings();
+  const modeSelect = document.querySelector("#external_lore_source_processor_mode");
   const externalRadio = document.querySelector("#external_lore_source_processor_mode_external");
   const tavernRadio = document.querySelector("#external_lore_source_processor_mode_tavern");
+  if (modeSelect) {
+    modeSelect.value = current.processorMode;
+  }
   if (externalRadio) {
     externalRadio.checked = current.processorMode === "external";
   }
@@ -1001,6 +1169,8 @@ function populateSettingsModal() {
   }
   const fields = {
     "#external_lore_source_processor_url": current.processorUrl,
+    "#external_lore_source_processor_fetch_key": current.processorFetchApiKey,
+    "#external_lore_source_processor_ai_url": current.processorAiUrl,
     "#external_lore_source_processor_key": current.processorApiKey,
     "#external_lore_source_processor_models_url": current.processorModelsUrl,
     "#external_lore_source_language": current.processorLanguage,
@@ -1043,10 +1213,19 @@ function populateSettingsModal() {
 }
 
 function updateProcessorModePanels() {
-  const mode = document.querySelector("#external_lore_source_processor_mode_tavern")?.checked ? "tavern" : "external";
+  const mode = processorModeInputValue();
   for (const panel of document.querySelectorAll("[data-processor-panel]")) {
     panel.hidden = panel.dataset.processorPanel !== mode;
   }
+  for (const node of document.querySelectorAll("[data-processor-external-only]")) {
+    node.hidden = mode !== "external";
+  }
+}
+
+function processorModeInputValue() {
+  const mode = document.querySelector("#external_lore_source_processor_mode")?.value
+    || (document.querySelector("#external_lore_source_processor_mode_tavern")?.checked ? "tavern" : "external");
+  return hasOwn(PROCESSOR_MODES, mode) ? mode : DEFAULT_SETTINGS.processorMode;
 }
 
 function saveSettingsModal() {
@@ -1058,8 +1237,10 @@ function saveSettingsModal() {
     order: current.injectionOrder,
     includeInWorldInfoScan: current.includeInWorldInfoScan
   };
-  current.processorMode = document.querySelector("#external_lore_source_processor_mode_tavern")?.checked ? "tavern" : "external";
+  current.processorMode = processorModeInputValue();
   current.processorUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_url")?.value);
+  current.processorFetchApiKey = String(document.querySelector("#external_lore_source_processor_fetch_key")?.value || "");
+  current.processorAiUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_ai_url")?.value);
   current.processorApiKey = String(document.querySelector("#external_lore_source_processor_key")?.value || "");
   current.processorModelsUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_models_url")?.value);
   current.processorModel = String(document.querySelector("#external_lore_source_processor_model")?.value || "").trim();
@@ -1096,7 +1277,10 @@ function saveSettingsModal() {
 
 async function handleFetchModels() {
   const current = settings();
+  current.processorMode = processorModeInputValue();
   current.processorUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_url")?.value);
+  current.processorFetchApiKey = String(document.querySelector("#external_lore_source_processor_fetch_key")?.value || "");
+  current.processorAiUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_ai_url")?.value);
   current.processorApiKey = String(document.querySelector("#external_lore_source_processor_key")?.value || "");
   current.processorModelsUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_models_url")?.value);
   setModalStatus("正在获取模型列表...");
@@ -1117,8 +1301,10 @@ async function handleFetchModels() {
 
 async function handleTestProcessor() {
   const current = settings();
-  current.processorMode = document.querySelector("#external_lore_source_processor_mode_tavern")?.checked ? "tavern" : "external";
+  current.processorMode = processorModeInputValue();
   current.processorUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_url")?.value);
+  current.processorFetchApiKey = String(document.querySelector("#external_lore_source_processor_fetch_key")?.value || "");
+  current.processorAiUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_ai_url")?.value);
   current.processorApiKey = String(document.querySelector("#external_lore_source_processor_key")?.value || "");
   current.processorModelsUrl = normalizeProcessorUrl(document.querySelector("#external_lore_source_processor_models_url")?.value);
   current.processorModel = String(document.querySelector("#external_lore_source_processor_model")?.value || "").trim();
@@ -1178,24 +1364,23 @@ function settingsModalMarkup() {
 
           <div class="external-lore-modal-section">
             <div class="external-lore-section-title">整理 API</div>
-            <div class="external-lore-mode-switch" role="radiogroup" aria-label="整理方式">
-              <label class="checkbox_label">
-                <input id="external_lore_source_processor_mode_external" type="radio" name="external_lore_source_processor_mode" value="external">
-                第三方整理 API
-              </label>
-              <label class="checkbox_label">
-                <input id="external_lore_source_processor_mode_tavern" type="radio" name="external_lore_source_processor_mode" value="tavern">
-                酒馆主 API
+            <div class="external-lore-api-source-row">
+              <label>
+                API 来源
+                <select id="external_lore_source_processor_mode" class="text_pole external-lore-api-source-select">
+                  <option value="external">第三方 API</option>
+                  <option value="tavern">主 API</option>
+                </select>
               </label>
             </div>
             <div class="external-lore-form-grid">
-              <label>
-                整理 / 抓取 API 地址
-                <input id="external_lore_source_processor_url" class="text_pole" type="url" placeholder="https://api.example.com/lore/context">
+              <label class="external-lore-full-row">
+                网页抓取 API 地址
+                <input id="external_lore_source_processor_url" class="text_pole" type="url" placeholder="https://api.example.com/lore/fetch">
               </label>
               <label>
-                API Key（可选）
-                <input id="external_lore_source_processor_key" class="text_pole" type="password" autocomplete="off">
+                抓取 API Key（可选）
+                <input id="external_lore_source_processor_fetch_key" class="text_pole" type="password" autocomplete="off">
               </label>
               <label>
                 语言
@@ -1210,8 +1395,16 @@ function settingsModalMarkup() {
             <div data-processor-panel="external" class="external-lore-processor-panel">
               <div class="external-lore-form-grid">
                 <label>
+                  聊天补全 API 地址
+                  <input id="external_lore_source_processor_ai_url" class="text_pole" type="url" placeholder="https://api.example.com/v1 或 /v1/chat/completions">
+                </label>
+                <label>
+                  API Key（可选）
+                  <input id="external_lore_source_processor_key" class="text_pole" type="password" autocomplete="off">
+                </label>
+                <label>
                   模型列表 API（可选）
-                  <input id="external_lore_source_processor_models_url" class="text_pole" type="url" placeholder="留空时尝试 /v1/models">
+                  <input id="external_lore_source_processor_models_url" class="text_pole" type="url" placeholder="留空时尝试 /models">
                 </label>
                 <label>
                   使用模型
@@ -1219,6 +1412,7 @@ function settingsModalMarkup() {
                   <datalist id="external_lore_source_model_list"></datalist>
                 </label>
               </div>
+              <div class="external-lore-help">第三方 API 使用兼容聊天补全的 JSON 格式；这里可以填 base URL，也可以填完整 <code>/chat/completions</code> 地址。模型列表 API 可以单独指定。</div>
             </div>
 
             <div data-processor-panel="tavern" class="external-lore-processor-panel" hidden>
@@ -1233,6 +1427,11 @@ function settingsModalMarkup() {
                 </label>
               </div>
               <div class="external-lore-help">这个模式仍需要上面的抓取 API 返回网页原文；插件再调用 SillyTavern 的 <code>generateRaw</code> 整理成 lore。</div>
+            </div>
+            <div class="external-lore-api-actions">
+              <button id="external_lore_source_test" type="button" class="menu_button">测试上下文</button>
+              <button id="external_lore_source_fetch_models" data-processor-external-only type="button" class="menu_button">获取模型</button>
+              <button id="external_lore_source_test_api" type="button" class="menu_button">测试连接</button>
             </div>
           </div>
 
@@ -1276,11 +1475,7 @@ function settingsModalMarkup() {
         <div id="external_lore_source_api_modal_status" class="external-lore-modal-status" data-type="neutral">配置后点击保存。</div>
 
         <div class="external-lore-dialog-actions">
-          <div class="external-lore-dialog-action-group">
-            <button id="external_lore_source_test" type="button" class="menu_button">测试上下文</button>
-            <button id="external_lore_source_fetch_models" type="button" class="menu_button">获取模型</button>
-            <button id="external_lore_source_test_api" type="button" class="menu_button">测试连接</button>
-          </div>
+          <div class="external-lore-dialog-spacer"></div>
           <div class="external-lore-dialog-action-group external-lore-dialog-action-group-primary">
             <button type="button" class="menu_button" data-modal-close>取消</button>
             <button id="external_lore_source_save_settings" type="button" class="menu_button">保存设置</button>
@@ -1301,6 +1496,7 @@ function bindSettingsModalEvents(modal) {
   modal.querySelector("#external_lore_source_save_settings")?.addEventListener("click", saveSettingsModal);
   modal.querySelector("#external_lore_source_fetch_models")?.addEventListener("click", handleFetchModels);
   modal.querySelector("#external_lore_source_test_api")?.addEventListener("click", handleTestProcessor);
+  modal.querySelector("#external_lore_source_processor_mode")?.addEventListener("change", updateProcessorModePanels);
   modal.querySelectorAll("[name='external_lore_source_processor_mode']").forEach((node) => {
     node.addEventListener("change", updateProcessorModePanels);
   });
@@ -1404,154 +1600,6 @@ function renderSettings() {
           <div id="external_lore_source_status" class="external-lore-status">待命 · v${EXTENSION_VERSION}</div>
         </div>
       </div>
-
-      <div id="external_lore_source_api_modal" class="external-lore-modal" aria-hidden="true">
-        <div class="external-lore-modal-backdrop" data-modal-close></div>
-        <div class="external-lore-dialog" role="dialog" aria-modal="true" aria-labelledby="external_lore_source_api_modal_title">
-          <div class="external-lore-dialog-header">
-            <div>
-              <div id="external_lore_source_api_modal_title" class="external-lore-dialog-title">External Lore Source 设置</div>
-              <div class="external-lore-dialog-subtitle">管理来源绑定、整理 API 和注入顺序。</div>
-            </div>
-            <button type="button" class="menu_button external-lore-icon-button" data-modal-close aria-label="关闭">×</button>
-          </div>
-
-          <div class="external-lore-modal-body">
-            <div class="external-lore-modal-section">
-              <div class="external-lore-section-title">来源绑定</div>
-              <div class="external-lore-form-grid">
-                <label>
-                  OC Wiki 地址
-                  <input id="external_lore_source_oc_base_url" class="text_pole" type="url" placeholder="https://oc.example.com">
-                </label>
-                <label>
-                  OC Wiki 分享链接
-                  <textarea id="external_lore_source_oc_share_url" class="text_pole" rows="2" placeholder="粘贴 OC Wiki 分享链接，例如 ?share=...#entry=..."></textarea>
-                </label>
-                <label class="external-lore-full-row">
-                  外部网页 / Wiki 链接
-                  <textarea id="external_lore_source_url" class="text_pole" rows="2" placeholder="粘贴网页、MediaWiki、百科页面或资料站链接"></textarea>
-                </label>
-              </div>
-              <div class="external-lore-actions">
-                <button id="external_lore_source_add_oc" type="button" class="menu_button">绑定 OC Wiki</button>
-                <button id="external_lore_source_add_web" type="button" class="menu_button">绑定网页</button>
-              </div>
-              <div id="external_lore_source_bindings" class="external-lore-bindings"></div>
-            </div>
-
-            <div class="external-lore-modal-section">
-              <div class="external-lore-section-title">整理 API</div>
-              <div class="external-lore-mode-switch" role="radiogroup" aria-label="整理方式">
-                <label class="checkbox_label">
-                  <input id="external_lore_source_processor_mode_external" type="radio" name="external_lore_source_processor_mode" value="external">
-                  第三方整理 API
-                </label>
-                <label class="checkbox_label">
-                  <input id="external_lore_source_processor_mode_tavern" type="radio" name="external_lore_source_processor_mode" value="tavern">
-                  酒馆主 API
-                </label>
-              </div>
-              <div class="external-lore-form-grid">
-                <label>
-                  整理 / 抓取 API 地址
-                  <input id="external_lore_source_processor_url" class="text_pole" type="url" placeholder="https://api.example.com/lore/context">
-                </label>
-                <label>
-                  API Key（可选）
-                  <input id="external_lore_source_processor_key" class="text_pole" type="password" autocomplete="off">
-                </label>
-                <label>
-                  语言
-                  <input id="external_lore_source_language" class="text_pole" type="text" placeholder="zh-CN">
-                </label>
-                <label>
-                  预算 token
-                  <input id="external_lore_source_max_tokens" class="text_pole" type="number" min="100" max="200000" step="100">
-                </label>
-              </div>
-
-              <div data-processor-panel="external" class="external-lore-processor-panel">
-                <div class="external-lore-form-grid">
-                  <label>
-                    模型列表 API（可选）
-                    <input id="external_lore_source_processor_models_url" class="text_pole" type="url" placeholder="留空时尝试 /v1/models">
-                  </label>
-                  <label>
-                    使用模型
-                    <input id="external_lore_source_processor_model" class="text_pole" type="text" list="external_lore_source_model_list" placeholder="手动输入或获取模型">
-                    <datalist id="external_lore_source_model_list"></datalist>
-                  </label>
-                </div>
-              </div>
-
-              <div data-processor-panel="tavern" class="external-lore-processor-panel" hidden>
-                <div class="external-lore-form-grid">
-                  <label>
-                    当前 API
-                    <input id="external_lore_source_tavern_main_api" class="text_pole" type="text" readonly>
-                  </label>
-                  <label>
-                    当前模型
-                    <input id="external_lore_source_tavern_model" class="text_pole" type="text" readonly>
-                  </label>
-                </div>
-                <div class="external-lore-help">这个模式仍需要上面的抓取 API 返回网页原文；插件再调用 SillyTavern 的 <code>generateRaw</code> 整理为 lore。</div>
-              </div>
-            </div>
-
-            <div class="external-lore-modal-section">
-              <div class="external-lore-section-title">注入设置</div>
-              <div class="external-lore-form-grid">
-                <label>
-                  注入位置
-                  <select id="external_lore_source_injection_position" class="text_pole">
-                    <option value="in_prompt">主提示词内 / In Prompt</option>
-                    <option value="before_prompt">主提示词前 / Before Prompt</option>
-                    <option value="in_chat">聊天中 / In Chat</option>
-                    <option value="none">不注入 / None</option>
-                  </select>
-                </label>
-                <label>
-                  深度
-                  <input id="external_lore_source_injection_depth" class="text_pole" type="number" min="0" max="10000" step="1">
-                </label>
-                <label>
-                  角色
-                  <select id="external_lore_source_injection_role" class="text_pole">
-                    <option value="system">系统 / System</option>
-                    <option value="user">用户 / User</option>
-                    <option value="assistant">助手 / Assistant</option>
-                  </select>
-                </label>
-                <label>
-                  注入顺序
-                  <input id="external_lore_source_injection_order" class="text_pole" type="number" min="0" max="9999" step="1">
-                </label>
-              </div>
-              <label class="checkbox_label external-lore-scan-toggle">
-                <input id="external_lore_source_include_wi_scan" type="checkbox">
-                参与世界书扫描
-              </label>
-              <div class="external-lore-help">使用 SillyTavern 原生扩展提示词注入。位置、深度、角色与酒馆的 Author's Note / Memory 类扩展一致；顺序会写入 prompt key，数值越小越靠前。</div>
-            </div>
-          </div>
-
-          <div id="external_lore_source_api_modal_status" class="external-lore-modal-status" data-type="neutral">配置后点击保存。</div>
-
-          <div class="external-lore-dialog-actions">
-            <div class="external-lore-dialog-action-group">
-              <button id="external_lore_source_test" type="button" class="menu_button">测试上下文</button>
-              <button id="external_lore_source_fetch_models" type="button" class="menu_button">获取模型</button>
-              <button id="external_lore_source_test_api" type="button" class="menu_button">测试连接</button>
-            </div>
-            <div class="external-lore-dialog-action-group external-lore-dialog-action-group-primary">
-              <button type="button" class="menu_button" data-modal-close>取消</button>
-              <button id="external_lore_source_save_settings" type="button" class="menu_button">保存设置</button>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   `);
 
@@ -1566,53 +1614,6 @@ function renderSettings() {
   document.querySelector("#external_lore_source_add_oc")?.addEventListener("click", addOcWikiBindingFromInput);
   document.querySelector("#external_lore_source_add_web")?.addEventListener("click", addExternalSourceFromInput);
   document.querySelector("#external_lore_source_open_settings")?.addEventListener("click", () => setSettingsModalOpen(true));
-  document.querySelector("#external_lore_source_save_settings")?.addEventListener("click", saveSettingsModal);
-  document.querySelector("#external_lore_source_fetch_models")?.addEventListener("click", handleFetchModels);
-  document.querySelector("#external_lore_source_test_api")?.addEventListener("click", handleTestProcessor);
-  document.querySelectorAll("[name='external_lore_source_processor_mode']").forEach((node) => {
-    node.addEventListener("change", updateProcessorModePanels);
-  });
-  document.querySelector("#external_lore_source_api_modal")?.addEventListener("click", (event) => {
-    if (event.target.closest("[data-modal-close]")) {
-      setSettingsModalOpen(false);
-    }
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && document.querySelector("#external_lore_source_api_modal")?.classList.contains("is-open")) {
-      setSettingsModalOpen(false);
-    }
-  });
-  document.querySelector("#external_lore_source_test")?.addEventListener("click", async () => {
-    try {
-      const prompt = await fetchContext();
-      updateStatus(prompt ? `上下文已读取：${prompt.length} 字符` : "没有可注入的上下文。");
-    } catch (error) {
-      updateStatus(`上下文读取失败：${error.message}`);
-    }
-  });
-  document.querySelector("#external_lore_source_bindings")?.addEventListener("click", (event) => {
-    const row = event.target.closest(".external-lore-binding");
-    const action = event.target.dataset.action;
-    if (!row || !action) {
-      return;
-    }
-    const current = settings();
-    const binding = current.bindings.find((item) => item.id === row.dataset.bindingId);
-    if (!binding) {
-      return;
-    }
-    if (action === "remove") {
-      current.bindings = current.bindings.filter((item) => item.id !== binding.id);
-      clearContextPrompt(current);
-    }
-    if (action === "toggle") {
-      binding.enabled = Boolean(event.target.checked);
-      clearContextPrompt(current);
-    }
-    saveSettings();
-    renderBindings();
-    renderPanelSummary();
-  });
   ensureSettingsModal();
   renderPanelSummary();
   renderBindings();

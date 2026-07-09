@@ -36,7 +36,8 @@
 
 .external-lore-actions,
 .external-lore-dialog-actions,
-.external-lore-mode-switch {
+.external-lore-mode-switch,
+.external-lore-api-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -148,10 +149,11 @@
 }
 
 .external-lore-modal {
+  --external-lore-z-modal: 50000;
   display: none;
   position: fixed;
   inset: 0;
-  z-index: 3000;
+  z-index: var(--external-lore-z-modal);
 }
 
 .external-lore-modal.is-open {
@@ -279,9 +281,34 @@
   margin: 0;
 }
 
+.external-lore-api-source-row label {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.7rem;
+  max-width: 26rem;
+}
+
+.external-lore-api-source-select {
+  width: 100%;
+}
+
 .external-lore-processor-panel {
   display: grid;
   gap: 0.55rem;
+}
+
+.external-lore-api-actions {
+  justify-content: flex-start;
+}
+
+.external-lore-api-actions .menu_button {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: max-content;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
 }
 
 .external-lore-scan-toggle {
@@ -360,7 +387,13 @@
     grid-template-columns: 1fr;
   }
 
+  .external-lore-api-source-row label {
+    grid-template-columns: 1fr;
+    max-width: none;
+  }
+
   .external-lore-dialog-actions .menu_button,
+  .external-lore-api-actions .menu_button,
   .external-lore-panel-row .menu_button {
     min-width: 0;
     width: 100%;
