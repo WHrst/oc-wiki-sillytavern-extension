@@ -18,9 +18,10 @@
 
 .external-lore-panel-summary,
 .external-lore-status {
-  opacity: 0.82;
+  color: var(--SmartThemeBodyColor);
   font-size: 0.9em;
   line-height: 1.4;
+  opacity: 0.9;
 }
 
 .external-lore-status {
@@ -28,8 +29,9 @@
 }
 
 .external-lore-section-title {
+  color: var(--SmartThemeEmColor);
   font-weight: 700;
-  opacity: 0.92;
+  opacity: 1;
 }
 
 .external-lore-actions,
@@ -43,12 +45,18 @@
 
 .external-lore-help {
   display: block;
-  opacity: 0.72;
+  color: var(--SmartThemeBodyColor);
   font-size: 0.9em;
   line-height: 1.45;
+  opacity: 0.86;
 }
 
 .external-lore-help code {
+  padding: 0 0.18rem;
+  border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 78%, var(--SmartThemeBodyColor));
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--SmartThemeChatTintColor, var(--SmartThemeBlurTintColor)) 78%, var(--SmartThemeBodyColor) 8%);
+  color: var(--SmartThemeEmColor);
   font-size: 0.92em;
 }
 
@@ -100,13 +108,15 @@
   border-radius: 4px;
   font-size: 0.78em;
   line-height: 1.35;
-  opacity: 0.82;
+  color: var(--SmartThemeBodyColor);
+  opacity: 0.9;
 }
 
 .external-lore-empty {
-  opacity: 0.72;
+  color: var(--SmartThemeBodyColor);
   font-size: 0.9em;
   line-height: 1.45;
+  opacity: 0.86;
 }
 
 .external-lore-modal {
@@ -127,6 +137,11 @@
 }
 
 .external-lore-dialog {
+  --external-lore-surface: var(--SmartThemeBlurTintColor, var(--SmartThemeChatTintColor, rgb(24 24 24)));
+  --external-lore-surface-base: var(--SmartThemeChatTintColor, var(--SmartThemeBlurTintColor, rgb(24 24 24)));
+  --external-lore-text: var(--SmartThemeBodyColor);
+  --external-lore-muted-text: color-mix(in srgb, var(--SmartThemeBodyColor) 82%, var(--SmartThemeEmColor) 18%);
+  --external-lore-divider: color-mix(in srgb, var(--SmartThemeBorderColor) 76%, var(--SmartThemeBodyColor) 24%);
   position: relative;
   display: grid;
   gap: 0.75rem;
@@ -135,11 +150,13 @@
   margin: 0.75rem auto;
   padding: 0.9rem;
   overflow: auto;
-  border: 1px solid var(--SmartThemeBorderColor);
+  border: 1px solid var(--external-lore-divider);
   border-radius: 6px;
-  background: var(--SmartThemeBodyColor);
-  color: var(--SmartThemeEmColor);
-  box-shadow: 0 18px 56px rgb(0 0 0 / 0.38);
+  background:
+    linear-gradient(var(--external-lore-surface), var(--external-lore-surface)),
+    var(--external-lore-surface-base);
+  color: var(--external-lore-text);
+  box-shadow: 0 18px 56px rgb(0 0 0 / 0.55);
 }
 
 .external-lore-dialog-header {
@@ -150,15 +167,18 @@
 }
 
 .external-lore-dialog-title {
+  color: var(--SmartThemeEmColor);
   font-size: 1rem;
   font-weight: 700;
+  line-height: 1.25;
 }
 
 .external-lore-dialog-subtitle {
   margin-top: 0.15rem;
-  opacity: 0.72;
+  color: var(--external-lore-muted-text);
   font-size: 0.9em;
   line-height: 1.4;
+  opacity: 1;
 }
 
 .external-lore-icon-button {
@@ -177,13 +197,16 @@
 .external-lore-modal-section {
   display: grid;
   gap: 0.55rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--SmartThemeBorderColor);
+  padding: 0.7rem;
+  border: 1px solid var(--external-lore-divider);
+  border-radius: 5px;
+  background: var(--external-lore-surface-base);
+  background: color-mix(in srgb, var(--external-lore-surface-base) 88%, var(--SmartThemeBodyColor) 6%);
 }
 
 .external-lore-modal-section:first-child {
-  padding-top: 0;
-  border-top: 0;
+  padding: 0.7rem;
+  border: 1px solid var(--external-lore-divider);
 }
 
 .external-lore-form-grid {
@@ -195,6 +218,25 @@
 .external-lore-form-grid label,
 .external-lore-full-row {
   min-width: 0;
+}
+
+.external-lore-dialog label,
+.external-lore-dialog .checkbox_label {
+  color: var(--external-lore-text);
+  font-weight: 600;
+  opacity: 1;
+}
+
+.external-lore-dialog input,
+.external-lore-dialog textarea,
+.external-lore-dialog select {
+  color: var(--SmartThemeBodyColor);
+}
+
+.external-lore-dialog input::placeholder,
+.external-lore-dialog textarea::placeholder {
+  color: var(--external-lore-muted-text);
+  opacity: 1;
 }
 
 .external-lore-full-row {
@@ -220,11 +262,15 @@
 
 .external-lore-modal-status {
   min-height: 1.4rem;
-  padding: 0.45rem 0;
-  border-top: 1px solid var(--SmartThemeBorderColor);
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--external-lore-divider);
+  border-radius: 5px;
+  background: var(--external-lore-surface-base);
+  background: color-mix(in srgb, var(--external-lore-surface-base) 90%, var(--SmartThemeBodyColor) 5%);
+  color: var(--external-lore-text);
   font-size: 0.9em;
   line-height: 1.4;
-  opacity: 0.92;
+  opacity: 1;
 }
 
 .external-lore-modal-status[data-type="success"] {

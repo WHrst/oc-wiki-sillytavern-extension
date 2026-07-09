@@ -1,6 +1,6 @@
 const LEGACY_MODULE_NAME = "oc-wiki-worldbook";
 const MODULE_NAME = "external-lore-source";
-const EXTENSION_VERSION = "0.4.3";
+const EXTENSION_VERSION = "0.4.4";
 const PROMPT_KEY_SUFFIX = `_${MODULE_NAME}`;
 const LEGACY_PROMPT_KEY_SUFFIX = `_${LEGACY_MODULE_NAME}`;
 
